@@ -27,11 +27,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const targetDate = (from as string) || todayStr;
 
   try {
-    const dataDir = path.join(process.cwd(), 'public', 'data');
-    let dataPath = path.join(dataDir, `kbo-${targetDate}.json`);
+    // 1. JSON 파일 경로 판별 (Vercel Serverless의 특수한 파일 적재 방식 완벽 대응)
+    let safeDirname = '';
+    try {
+      safeDirname = __dirname;
+    } catch {
+      safeDirname = process.cwd();
+    }
 
-    if (!fs.existsSync(dataPath)) {
-      dataPath = path.join(dataDir, 'kbo-latest.json');
+    const findDataPath = (fileName: string): string | null => {
+      const candidates = [
+        path.join(process.cwd(), 'public', 'data', fileName),
+        path.join(process.cwd(), 'data', fileName),
+        path.join(safeDirname, '..', 'public', 'data', fileName),
+        path.join(safeDirname, '..', '..', 'public', 'data', fileName),
+        path.join(safeDirname, '..', '..', '..', 'public', 'data', fileName),
+        path.join(safeDirname, 'public', 'data', fileName),
+        path.join(safeDirname, 'data', fileName),
+        path.join('/var/task', 'public', 'data', fileName),
+      ];
+      for (const p of candidates) {
+        if (fs.existsSync(p)) {
+          console.log(`[api/kbo/schedule] Found ${fileName} at: ${p}`);
+          return p;
+        }
+      }
+      return null;
+    };
+
+    let dataPath = findDataPath(`kbo-${targetDate}.json`);
+
+    if (!dataPath) {
+      console.log(`[api/kbo/schedule] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
+      dataPath = findDataPath('kbo-latest.json');
     }
 
     let kboData: any;
