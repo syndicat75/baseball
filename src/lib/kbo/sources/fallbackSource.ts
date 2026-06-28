@@ -14,7 +14,7 @@ import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 export const fallbackSource: KboDataSource = {
   id: 'bundled-fallback',
   label: '번들 로컬 예비 데이터',
-  priority: 5,
+  priority: 4,
 
   async getStandings(date: string): Promise<KBOStandingsResult> {
     console.log(`[fallbackSource] Returning bundled fallback standings for date: ${date}`);

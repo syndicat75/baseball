@@ -332,7 +332,7 @@ export default function App() {
         <div className={`border rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs animate-fade-in ${
           error ? 'bg-rose-50 border-rose-200 text-rose-900' :
           simData?.source === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-900' :
-          (simData?.source === 'mykbostats' || simData?.source === 'aiscore') ? 'bg-amber-50 border-amber-200 text-amber-900' :
+          (simData?.source === 'mykbostats' || simData?.source === 'thesportsdb' || simData?.source === 'aiscore') ? 'bg-amber-50 border-amber-200 text-amber-900' :
           'bg-emerald-50 border-emerald-200 text-emerald-900'
         }`}>
           <div className="flex-1 space-y-1">
@@ -348,7 +348,7 @@ export default function App() {
                   <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
                   주황 경고: 예비 데이터 연동 중 (내장 번들 활용)
                 </span>
-              ) : (simData?.source === 'mykbostats' || simData?.source === 'aiscore') ? (
+              ) : (simData?.source === 'mykbostats' || simData?.source === 'thesportsdb' || simData?.source === 'aiscore') ? (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                   노란 경고: {simData?.sourceLabel || '보조 데이터 연동 완료'}
@@ -356,18 +356,18 @@ export default function App() {
               ) : (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
                   <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  정상: 실시간 KBO 공식 연동 완료
+                  정상: {simData?.sourceLabel || '실시간 KBO 공식 연동 완료'}
                 </span>
               )}
             </div>
 
             <div className="text-[11px] text-slate-600 space-y-0.5 pt-1.5 font-medium">
               <div>• 사용 데이터: <strong className="text-slate-800 font-semibold">{simData?.sourceLabel || '실시간 KBO 공식 데이터'}</strong></div>
-              {simData && simData.source !== 'official-kbo-en' && simData.source !== 'official-kbo-ko' && simData.source !== 'official-kbo' && (
-                <div className="text-rose-600 font-bold">• KBO 공식 사이트 수집 실패 (네트워크 장애 또는 Vercel IP 차단 감지)</div>
+              {simData && simData.source === 'bundled-fallback' && (
+                <div className="text-orange-600 font-bold">• 모든 원격 데이터 소스 수집 실패로 인해 내장 예비 데이터셋을 사용하고 있습니다.</div>
               )}
               {simData && (
-                <div className="text-emerald-700 font-semibold">• 계산 완료 여부: 보조 또는 예비 데이터 기준으로 가을야구 연산이 정상 완료됨</div>
+                <div className="text-emerald-700 font-semibold">• 계산 완료 여부: 수집된 KBO 데이터 기준으로 가을야구 연산이 정상 완료됨</div>
               )}
             </div>
           </div>

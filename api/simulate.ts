@@ -40,17 +40,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const randSeed = seed ? parseInt(seed as string) : 42;
 
   try {
-    // 1. Gather the historical/current standings snapshot for the date
-    console.log(`[api/simulate] Step 1: Compiling standings snapshot as of "${targetDate}"...`);
-    let standings;
-    if (targetDate >= todayStr) {
-      standings = await getBestAvailableStandings(targetDate);
-    } else {
-      standings = await buildSnapshotByDate(targetDate);
-    }
+    // 1. Gather standings snapshot for the date via Source Manager
+    console.log(`[api/simulate] Step 1: Compiling standings snapshot as of "${targetDate}" via Source Manager...`);
+    const standings = await getBestAvailableStandings(targetDate);
 
-    // 2. Gather remaining schedule starting from the day after the snapshot date
-    console.log(`[api/simulate] Step 2: Compiling schedule and postponed games after "${targetDate}"...`);
+    // 2. Gather remaining schedule starting from the date via Source Manager
+    console.log(`[api/simulate] Step 2: Compiling schedule after "${targetDate}" via Source Manager...`);
     const schedule = await getBestAvailableSchedule(targetDate);
 
     // 3. Run Monte Carlo simulation on the future schedule
@@ -63,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     const isFallback = standings.source === 'bundled-fallback' || schedule.source === 'bundled-fallback';
-    const finalSource = isFallback ? 'bundled-fallback' : (standings.source || 'official-kbo');
+    const finalSource = isFallback ? 'bundled-fallback' : (standings.source || 'mykbostats');
 
     const responseBody = {
       ...simResults,

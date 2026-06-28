@@ -33,7 +33,7 @@ export function normaliseEngTeamCode(name: string): string {
 export const officialKboEnglishSource: KboDataSource = {
   id: 'official-kbo-en',
   label: 'KBO 공식 영문 사이트',
-  priority: 1,
+  priority: 2,
 
   async getStandings(date: string): Promise<KBOStandingsResult> {
     console.log(`[officialKboEnglishSource] [CALL] getStandings - Date: ${date}`);

@@ -1,6 +1,6 @@
 /**
  * @file myKboStatsSource.ts
- * @description MyKBOStats Data Source. Priority 2, unofficial auxiliary data source.
+ * @description MyKBOStats Data Source. Priority 1, primary unofficial auxiliary data source.
  */
 
 import * as cheerio from 'cheerio';
@@ -14,7 +14,7 @@ import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 export const myKboStatsSource: KboDataSource = {
   id: 'mykbostats',
   label: 'MyKBOStats 비공식 보조 데이터',
-  priority: 2,
+  priority: 1,
 
   async getStandings(date: string): Promise<KBOStandingsResult> {
     console.log(`[myKboStatsSource] [CALL] getStandings - Date: ${date}`);

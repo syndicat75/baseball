@@ -25,16 +25,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const todayStr = getKstDateString();
 
   try {
-    console.log(`[api/kbo/standings] Processing standings snapshot for date: "${targetDate}" (forceRefresh: ${forceRefresh})`);
+    console.log(`[api/kbo/standings] Processing standings snapshot for date: "${targetDate}"`);
     
-    let standings;
-    if (targetDate >= todayStr) {
-      console.log(`[api/kbo/standings] Date is today or future. Querying source manager for best available standings.`);
-      standings = await getBestAvailableStandings(targetDate);
-    } else {
-      console.log(`[api/kbo/standings] Date is in the past. Reconstructing standings from schedule.`);
-      standings = await buildSnapshotByDate(targetDate, forceRefresh);
-    }
+    // 항상 다중 소스 지원 getBestAvailableStandings 호출
+    const standings = await getBestAvailableStandings(targetDate);
 
     console.log(`[api/kbo/standings] Successfully constructed standings. Source: "${standings.source}", errorType: "${standings.errorType || 'none'}"`);
     
