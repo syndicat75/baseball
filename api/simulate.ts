@@ -22,7 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Default to Korea Standard Time today if no date is provided
   const targetDate = (date as string) || getKstDateString();
-  const iters = parseInt(iterations as string) || 50000;
+  let iters = parseInt(iterations as string) || 10000;
+  // Cap at 10000 for serverless safety to ensure execution times strictly below 2 seconds
+  if (iters > 10000) {
+    iters = 10000;
+  }
   const modelType = (model as ProbabilityModelType) || 'winRate';
   const randSeed = seed ? parseInt(seed as string) : 42;
   const forceRefresh = refresh === 'true';
@@ -51,9 +55,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         from: targetDate,
         games: upcomingGames,
         unresolvedGames: [],
-        source: 'fallback-sample',
+        source: 'bundled-fallback',
         errorType: '샘플 데이터 사용' as const,
-        errorMessage: `KBO 공식 일정을 수집할 수 없어 내장 샘플 일정을 사용하여 보정합니다. (상세: ${schedError.message})`,
+        errorMessage: `KBO 공식 일정을 수집할 수 없어 내장 번들 일정을 사용하여 보정합니다. (상세: ${schedError.message})`,
       };
     }
 
@@ -67,11 +71,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       seed: randSeed,
     });
 
-    const isFallback = standings.source === 'fallback-sample' || schedule.source === 'fallback-sample';
+    const isFallback = standings.source === 'bundled-fallback' || schedule.source === 'bundled-fallback' || standings.source === 'fallback-sample' || schedule.source === 'fallback-sample';
     const responseBody = {
       ...simResults,
       unresolvedGames: schedule.unresolvedGames,
-      source: isFallback ? 'fallback-sample' : 'official-kbo',
+      source: isFallback ? 'bundled-fallback' : 'official-kbo',
       errorType: standings.errorType || schedule.errorType,
       errorMessage: standings.errorMessage || schedule.errorMessage,
     };

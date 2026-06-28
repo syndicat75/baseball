@@ -21,7 +21,7 @@ interface FullSimulationData {
   model: string;
   results: TeamSimulationStats[];
   unresolvedGames: any[];
-  source: 'official-kbo' | 'fallback-sample';
+  source: 'official-kbo' | 'cache' | 'fallback-sample' | 'bundled-fallback';
   errorType?: string;
   errorMessage?: string;
 }
@@ -34,7 +34,7 @@ export default function App() {
 
   // User input states
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
-  const [iterations, setIterations] = useState<number>(50000);
+  const [iterations, setIterations] = useState<number>(10000);
   const [selectedModel, setSelectedModel] = useState<'basic' | 'winRate' | 'hybrid'>('winRate');
   const [seed, setSeed] = useState<number>(42);
 
@@ -81,21 +81,27 @@ export default function App() {
       const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error(`Server returned status: ${response.status}`);
+        let errData;
+        try {
+          errData = await response.json();
+        } catch {
+          throw new Error(`서버 오류 (상태 코드: ${response.status})`);
+        }
+        throw new Error(errData.errorMessage || errData.details || `서버 오류 (상태 코드: ${response.status})`);
       }
 
       const data = await response.json() as FullSimulationData;
       console.log(`[App] Successfully received simulation data from server. Source: "${data.source}"`);
       
       setSimData(data);
-      setIsFallbackSample(data.source === 'fallback-sample');
+      setIsFallbackSample(data.source === 'fallback-sample' || data.source === 'bundled-fallback');
       
       const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastUpdated(currentTime);
       setDiagnostic(prev => ({ ...prev, lastSuccessTime: currentTime }));
     } catch (err: any) {
       console.error(`[App] Error in fetchSimulationResults:`, err);
-      setError('데이터 수집 또는 연산 실행 중 문제가 발생했습니다. 자가진단을 통해 정밀 원인을 확인해 주세요.');
+      setError(err.message || '데이터 수집 또는 연산 실행 중 문제가 발생했습니다. 자가진단을 통해 정밀 원인을 확인해 주세요.');
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +131,11 @@ export default function App() {
       // Step 1: Health Check
       const healthRes = await fetch('/api/health');
       if (!healthRes.ok) {
-        throw new Error(`API 헬스체크 실패 (상태 코드: ${healthRes.status}). API route가 배포되지 않았거나 꺼져 있을 수 있습니다.`);
+        let errData;
+        try {
+          errData = await healthRes.json();
+        } catch {}
+        throw new Error(errData?.errorMessage || `API 헬스체크 실패 (상태 코드: ${healthRes.status}). API route가 배포되지 않았거나 꺼져 있을 수 있습니다.`);
       }
       const healthData = await healthRes.json();
       if (!healthData.ok) {
@@ -142,13 +152,17 @@ export default function App() {
       // Step 2: Standings Check
       const standingsRes = await fetch(`/api/kbo/standings?date=${selectedDate}`);
       if (!standingsRes.ok) {
-        throw new Error(`KBO 순위 수집 API 호출 실패 (상태 코드: ${standingsRes.status}). KBO fetch 실패 또는 HTML parser 실패.`);
+        let errData;
+        try {
+          errData = await standingsRes.json();
+        } catch {}
+        throw new Error(errData?.errorMessage || `KBO 순위 수집 API 호출 실패 (상태 코드: ${standingsRes.status}).`);
       }
       const standingsData = await standingsRes.json();
       
       // Determine Standings source status
       let standingsStatus: 'official-kbo' | 'cache' | 'fallback-sample' = 'official-kbo';
-      if (standingsData.source === 'fallback-sample') {
+      if (standingsData.source === 'fallback-sample' || standingsData.source === 'bundled-fallback') {
         standingsStatus = 'fallback-sample';
       } else if (standingsData.errorType === '캐시 데이터 사용') {
         standingsStatus = 'cache';
@@ -164,12 +178,16 @@ export default function App() {
       // Step 3: Schedule Check
       const scheduleRes = await fetch(`/api/kbo/schedule?from=${selectedDate}`);
       if (!scheduleRes.ok) {
-        throw new Error(`KBO 일정 수집 API 호출 실패 (상태 코드: ${scheduleRes.status}). 일정 fetch 실패 또는 HTML parser 실패.`);
+        let errData;
+        try {
+          errData = await scheduleRes.json();
+        } catch {}
+        throw new Error(errData?.errorMessage || `KBO 일정 수집 API 호출 실패 (상태 코드: ${scheduleRes.status}).`);
       }
       const scheduleData = await scheduleRes.json();
 
       let scheduleStatus: 'official-kbo' | 'cache' | 'fallback-sample' = 'official-kbo';
-      if (scheduleData.source === 'fallback-sample') {
+      if (scheduleData.source === 'fallback-sample' || scheduleData.source === 'bundled-fallback') {
         scheduleStatus = 'fallback-sample';
       } else if (scheduleData.errorType === '캐시 데이터 사용') {
         scheduleStatus = 'cache';
@@ -185,12 +203,16 @@ export default function App() {
       // Step 4: Simulation Check
       const simulateRes = await fetch(`/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`);
       if (!simulateRes.ok) {
-        throw new Error(`시뮬레이션 API 호출 실패 (상태 코드: ${simulateRes.status}). 시뮬레이션 연산 중 오류 발생.`);
+        let errData;
+        try {
+          errData = await simulateRes.json();
+        } catch {}
+        throw new Error(errData?.errorMessage || `시뮬레이션 API 호출 실패 (상태 코드: ${simulateRes.status}).`);
       }
       const simulateData = await simulateRes.json();
       
       setSimData(simulateData);
-      setIsFallbackSample(simulateData.source === 'fallback-sample');
+      setIsFallbackSample(simulateData.source === 'fallback-sample' || simulateData.source === 'bundled-fallback');
       
       const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastUpdated(currentTime);
@@ -266,6 +288,41 @@ export default function App() {
 
       {/* 2. Main Container */}
       <main className="max-w-7xl mx-auto px-4 mt-8 space-y-6">
+        
+        {/* Connection Status Banner */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-slate-500">데이터 연동 상태:</span>
+            {error ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-bold border border-rose-100 animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-rose-500" />
+                연동 오류가 감지되었습니다. (내장 엔진 자동 복구 시도 중)
+              </span>
+            ) : simData?.source === 'official-kbo' ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-100">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                실시간 KBO 데이터 연동 완료
+              </span>
+            ) : simData?.source === 'cache' ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-100">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                캐시된 KBO 데이터 연동 완료
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-bold border border-amber-100">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                샘플 데이터 연동 중 (내장 번들 활용)
+              </span>
+            )}
+          </div>
+          
+          {(error || simData?.errorMessage) && (
+            <div className="text-slate-500 flex items-center gap-1 bg-slate-50 px-2.5 py-1 rounded border border-slate-100 font-medium max-w-xl overflow-hidden text-ellipsis">
+              <span>ℹ️ 상세정보:</span>
+              <span className="text-slate-600 font-semibold">{error || simData?.errorMessage}</span>
+            </div>
+          )}
+        </div>
         
         {/* Row 1: Configuration & Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -426,7 +483,7 @@ export default function App() {
                   <h4 className="font-bold text-amber-800 text-sm">실시간 KBO 데이터 수집 실패 보정 안내</h4>
                   <p className="text-xs text-amber-700 font-medium leading-relaxed mt-0.5">
                     현재 공식 KBO 서버로부터 최신 데이터를 수집하는 데 어려움이 있습니다. 
-                    따라서 <strong>공식 KBO 데이터가 아닌 샘플/캐시 기반 결과</strong>로 시뮬레이션을 지속합니다. 
+                    따라서 <strong>공식 KBO 데이터가 아닌 내장 번들/캐시 기반 결과</strong>로 시뮬레이션을 지속합니다. 
                     계산 결과는 정상이므로 서비스 탐색 및 가을야구 시나리오 분석은 즉시 가능합니다.
                   </p>
                 </div>

@@ -9,56 +9,24 @@ import { normalizeTeamName } from './normalizeTeamName';
 import { CONFIG } from '../../config';
 import { StandingsTeam, KBOStandingsResult } from '../../types';
 import { fetchKboPage } from './fetchKboPage';
+import { fallbackStandings2026 } from '../../data/fallbackStandings2026';
 
 /**
  * Generates realistic fallback/sample standings in case KBO scraping fails completely.
  * 
  * @param dateStr - The target date in YYYY-MM-DD format.
+ * @param errorType - Optional error type causing this fallback.
+ * @param errorMessage - Optional error message detailing the failure.
  * @returns KBOStandingsResult containing fallback standings.
  */
-export function getFallbackStandings(dateStr: string): KBOStandingsResult {
-  console.log(`[parseStandings] [CALL] getFallbackStandings - Date: ${dateStr}`);
-  const teams: StandingsTeam[] = [
-    { team: 'KIA', nameKo: 'KIA', games: 80, wins: 48, losses: 30, draws: 2, winRate: 0.615, rank: 1 },
-    { team: 'SAMSUNG', nameKo: '삼성', games: 80, wins: 46, losses: 32, draws: 2, winRate: 0.590, rank: 2 },
-    { team: 'LG', nameKo: 'LG', games: 81, wins: 45, losses: 34, draws: 2, winRate: 0.570, rank: 3 },
-    { team: 'DOOSAN', nameKo: '두산', games: 82, wins: 44, losses: 36, draws: 2, winRate: 0.550, rank: 4 },
-    { team: 'SSG', nameKo: 'SSG', games: 80, wins: 41, losses: 38, draws: 1, winRate: 0.519, rank: 5 },
-    { team: 'KT', nameKo: 'KT', games: 81, wins: 38, losses: 41, draws: 2, winRate: 0.481, rank: 6 },
-    { team: 'HANWHA', nameKo: '한화', games: 79, wins: 36, losses: 41, draws: 2, winRate: 0.468, rank: 7 },
-    { team: 'LOTTE', nameKo: '롯데', games: 78, wins: 34, losses: 41, draws: 3, winRate: 0.453, rank: 8 },
-    { team: 'NC', nameKo: 'NC', games: 80, wins: 35, losses: 43, draws: 2, winRate: 0.449, rank: 9 },
-    { team: 'KIWOOM', nameKo: '키움', games: 79, wins: 31, losses: 48, draws: 0, winRate: 0.392, rank: 10 },
-  ];
-
-  // Initialize realistic head-to-head records
-  const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
-  const teamCodes = Object.keys(CONFIG.TEAMS);
-  
-  for (const t1 of teamCodes) {
-    headToHead[t1] = {};
-    for (const t2 of teamCodes) {
-      if (t1 === t2) continue;
-      // Generate deterministic pseudo-random dummy head to head matches to keep results stable
-      const charSum = t1.charCodeAt(0) + t2.charCodeAt(0);
-      const wins = charSum % 5;
-      const losses = 8 - wins - (charSum % 2 === 0 ? 0 : 1);
-      const draws = 8 - wins - losses;
-      headToHead[t1][t2] = {
-        wins,
-        losses,
-        draws: Math.max(0, draws)
-      };
-    }
-  }
-
+export function getFallbackStandings(dateStr: string, errorType?: string, errorMessage?: string): KBOStandingsResult {
+  console.log(`[parseStandings] [CALL] getFallbackStandings - Date: ${dateStr}, error: ${errorMessage}`);
   return {
+    ...fallbackStandings2026,
     asOfDate: dateStr,
-    source: 'fallback-sample',
-    teams,
-    headToHead,
-    errorType: '샘플 데이터 사용',
-    errorMessage: 'KBO 실시간 데이터를 가져올 수 없어 예비 데이터를 사용합니다.',
+    source: 'bundled-fallback',
+    errorType: (errorType || '샘플 데이터 사용') as any,
+    errorMessage: errorMessage || 'KBO 실시간 데이터를 가져올 수 없어 내장 번들 예비 데이터셋을 사용합니다.',
   };
 }
 
@@ -370,19 +338,13 @@ function getEstimatedHeadToHead(teams: StandingsTeam[]): Record<string, Record<s
 export async function parseStandings(dateStr: string): Promise<KBOStandingsResult> {
   console.log(`[parseStandings] [CALL] parseStandings - Date: "${dateStr}"`);
 
-  let rawHtml = '';
-  try {
-    rawHtml = await fetchKboPage(CONFIG.KBO_URLS.standings);
-  } catch (fetchError: any) {
-    console.error(`[parseStandings] Network fetch failed for standings page:`, fetchError);
-    const fallback = getFallbackStandings(dateStr);
-    return {
-      ...fallback,
-      errorType: 'KBO fetch 실패',
-      errorMessage: `KBO 공식 순위 페이지 다운로드 중 오류가 발생하여 내장 데이터로 보정합니다. (상세: ${fetchError.message})`
-    };
+  const fetchResult = await fetchKboPage(CONFIG.KBO_URLS.standings);
+  if (!fetchResult.ok) {
+    console.error(`[parseStandings] Standings fetch failed: ${fetchResult.errorMessage}`);
+    return getFallbackStandings(dateStr, fetchResult.errorType, fetchResult.errorMessage);
   }
 
+  const rawHtml = fetchResult.data || '';
   const $ = cheerio.load(rawHtml);
   const plainText = $.text();
 
@@ -396,14 +358,14 @@ export async function parseStandings(dateStr: string): Promise<KBOStandingsResul
     teams = parseStandingsText(plainText);
   }
 
-  if (!teams) {
-    console.error(`[parseStandings] Both table and text parsing failed.`);
-    const fallback = getFallbackStandings(dateStr);
-    return {
-      ...fallback,
-      errorType: 'HTML parser 실패',
-      errorMessage: 'KBO 순위 페이지 형식 변경으로 파싱이 모두 실패하였습니다. 내장 데이터를 적용합니다.',
-    };
+  // Ensure teams 10개가 확보되어야 함. 그렇지 않으면 fallback으로 전환!
+  if (!teams || teams.length !== 10) {
+    console.error(`[parseStandings] Standings parsing failed. Teams count obtained: ${teams ? teams.length : 0}. Converting to fallback.`);
+    return getFallbackStandings(
+      dateStr, 
+      'HTML parser 실패', 
+      'KBO 공식 순위 페이지 레이아웃이 변경되어 10개 구단을 정상 파싱할 수 없습니다.'
+    );
   }
 
   // Parse head-to-head records

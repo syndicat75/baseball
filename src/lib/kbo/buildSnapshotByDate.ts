@@ -5,9 +5,10 @@
  */
 
 import { CONFIG } from '../../config';
-import { parseStandings } from './parseStandings';
+import { parseStandings, getFallbackStandings } from './parseStandings';
 import { getFullSeasonSchedule } from './parseSchedule';
 import { KBOStandingsResult, StandingsTeam, KBOGame } from '../../types';
+import { fallbackStandings2026 } from '../../data/fallbackStandings2026';
 
 /**
  * Returns the current date string in Asia/Seoul timezone (Korea Standard Time) in YYYY-MM-DD format.
@@ -161,49 +162,23 @@ export async function buildSnapshotByDate(dateStr: string, forceRefresh = false)
 
   // If selecting today (or future), try to parse official standings first
   if (dateStr >= todayStr) {
-    try {
-      console.log(`[buildSnapshotByDate] Requested date is today or future ("${dateStr}"). Attempting official KBO standings parse...`);
-      const standings = await parseStandings(dateStr);
-      if (standings.source === 'official-kbo' && standings.teams && standings.teams.length === 10) {
-        console.log(`[buildSnapshotByDate] Live official KBO standings parsed successfully with 10 teams. Returning immediately.`);
-        return standings;
-      }
-      console.warn(`[buildSnapshotByDate] parseStandings did not return official-kbo source or 10 teams. Received source: "${standings.source}". Falling back to schedule-based reconstruction.`);
-    } catch (e) {
-      console.warn(`[buildSnapshotByDate] Failed to parse live standings. Falling back to schedule reconstruction...`, e);
-    }
+    console.log(`[buildSnapshotByDate] Requested date is today or future ("${dateStr}"). Running standings compiler...`);
+    const standings = await parseStandings(dateStr);
+    console.log(`[buildSnapshotByDate] Standings compiler finished (source: "${standings.source}"). Returning immediately.`);
+    return standings;
   }
 
   // Load the complete schedule (completed + scheduled) to reconstruct standings
   try {
     const year = parseInt(dateStr.split('-')[0]) || 2026;
-    console.log(`[buildSnapshotByDate] Reconstructing standings for date "${dateStr}" using full season schedule for year ${year}...`);
+    console.log(`[buildSnapshotByDate] Reconstructing standings for past date "${dateStr}" using full season schedule for year ${year}...`);
     
-    // Call getFullSeasonSchedule directly as instructed, instead of legacy getSchedule
     const fullSeasonGames = await getFullSeasonSchedule(year, forceRefresh);
     const snapshot = reconstructStandingsFromSchedule(dateStr, fullSeasonGames);
     return snapshot;
-  } catch (error) {
+  } catch (error: any) {
     console.error(`[buildSnapshotByDate] Failed to build snapshot from schedule:`, error);
     // Ultimate fallback is realistic dummy standings
-    return {
-      asOfDate: dateStr,
-      source: 'fallback-sample',
-      teams: [
-        { team: 'KIA', nameKo: 'KIA', games: 80, wins: 48, losses: 30, draws: 2, winRate: 0.615, rank: 1 },
-        { team: 'SAMSUNG', nameKo: '삼성', games: 80, wins: 46, losses: 32, draws: 2, winRate: 0.590, rank: 2 },
-        { team: 'LG', nameKo: 'LG', games: 81, wins: 45, losses: 34, draws: 2, winRate: 0.570, rank: 3 },
-        { team: 'DOOSAN', nameKo: '두산', games: 82, wins: 44, losses: 36, draws: 2, winRate: 0.550, rank: 4 },
-        { team: 'SSG', nameKo: 'SSG', games: 80, wins: 41, losses: 38, draws: 1, winRate: 0.519, rank: 5 },
-        { team: 'KT', nameKo: 'KT', games: 81, wins: 38, losses: 41, draws: 2, winRate: 0.481, rank: 6 },
-        { team: 'HANWHA', nameKo: '한화', games: 79, wins: 36, losses: 41, draws: 2, winRate: 0.468, rank: 7 },
-        { team: 'LOTTE', nameKo: '롯데', games: 78, wins: 34, losses: 41, draws: 3, winRate: 0.453, rank: 8 },
-        { team: 'NC', nameKo: 'NC', games: 80, wins: 35, losses: 43, draws: 2, winRate: 0.449, rank: 9 },
-        { team: 'KIWOOM', nameKo: '키움', games: 79, wins: 31, losses: 48, draws: 0, winRate: 0.392, rank: 10 },
-      ],
-      headToHead: {},
-      errorType: '샘플 데이터 사용',
-      errorMessage: `구단 및 일정 데이터베이스 복원 오류가 생겨 샘플 시뮬레이션 데이터를 제공합니다.`,
-    };
+    return getFallbackStandings(dateStr, 'HTML parser 실패', `과거 날짜 순위 재구성 오류: ${error.message}`);
   }
 }

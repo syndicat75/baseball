@@ -10,6 +10,7 @@ import { CONFIG } from '../../config';
 import { getCache, setCache } from './cache';
 import { KBOGame, KBOScheduleResult } from '../../types';
 import { fetchKboPage } from './fetchKboPage';
+import { fallbackSchedule2026 } from '../../data/fallbackSchedule2026';
 
 /**
  * Parses a single matchup text cell into scores and team designations.
@@ -86,142 +87,13 @@ export function parseMatchup(text: string): {
 
 /**
  * Generates highly realistic fallback KBO schedules for testing & recovery.
- * It schedules 144 games per team (16 games against each of the other 9 teams).
- * Total matches = 10 * 144 / 2 = 720 matches.
- * Matches span from 2026-03-22 to 2026-09-30.
+ * Returns the bundled KBO 2026 season schedule dataset.
  * 
  * @returns Deterministic fallback season games array.
  */
 export function generateFallbackSchedule(): KBOGame[] {
-  console.log('[parseSchedule] [CALL] generateFallbackSchedule - Generating 720-game realistic fallback schedule...');
-  const teams = Object.keys(CONFIG.TEAMS);
-  const games: KBOGame[] = [];
-  
-  const startDate = new Date('2026-03-22');
-  const stadiums = ['JAMSIL', 'SAJIK', 'DAEGU', 'GWANGJU', 'GOCHEOK', 'MUNCHAK', 'SUWON', 'HANWHA_EAGLES_PARK', 'CHANGWON'];
-
-  // To build a realistic schedule, we pair each team with every other team 16 times (8 home, 8 away).
-  // We distribute them over 180 days.
-  let matchDay = 0;
-  
-  // Generate pairs
-  const matchups: Array<{ home: string; away: string }> = [];
-  for (let i = 0; i < teams.length; i++) {
-    for (let j = 0; j < teams.length; j++) {
-      if (i === j) continue;
-      // 8 matches for each home-away pair
-      for (let k = 0; k < 8; k++) {
-        matchups.push({ home: teams[i], away: teams[j] });
-      }
-    }
-  }
-
-  // Shuffle matchups deterministically with a simple LCG random number generator so it's reproducible
-  let seed = 12345;
-  const rand = () => {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  };
-
-  for (let i = matchups.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    const temp = matchups[i];
-    matchups[i] = matchups[j];
-    matchups[j] = temp;
-  }
-
-  // Allocate 4-5 games per day
-  let matchupIdx = 0;
-  const totalMatchups = matchups.length; // 720 games
-
-  while (matchupIdx < totalMatchups) {
-    const currentDate = new Date(startDate);
-    currentDate.setDate(startDate.getDate() + matchDay);
-    const dateStr = currentDate.toISOString().split('T')[0];
-
-    // Check if we hit the end date
-    if (currentDate > new Date('2026-09-30')) {
-      break;
-    }
-
-    // Schedule up to 5 games for today
-    const gamesToday = Math.min(5, totalMatchups - matchupIdx);
-    const activeTeamsInDay = new Set<string>();
-
-    for (let g = 0; g < gamesToday; g++) {
-      // Find a game where neither team is playing today yet
-      let chosenIdx = -1;
-      for (let scan = matchupIdx; scan < totalMatchups; scan++) {
-        const m = matchups[scan];
-        if (!activeTeamsInDay.has(m.home) && !activeTeamsInDay.has(m.away)) {
-          chosenIdx = scan;
-          break;
-        }
-      }
-
-      if (chosenIdx !== -1) {
-        // Swap to the current position to preserve scheduling index
-        const temp = matchups[matchupIdx];
-        matchups[matchupIdx] = matchups[chosenIdx];
-        matchups[chosenIdx] = temp;
-
-        const game = matchups[matchupIdx];
-        activeTeamsInDay.add(game.home);
-        activeTeamsInDay.add(game.away);
-
-        // Determine if this game is completed (e.g., if date is before 2026-06-28)
-        const isPast = dateStr < '2026-06-28';
-        let status: 'completed' | 'scheduled' | 'postponed' = 'scheduled';
-        let awayScore: number | null = null;
-        let homeScore: number | null = null;
-
-        if (isPast) {
-          // completed game, decide scores (away wins 48% home wins 52% to represent home advantage)
-          status = 'completed';
-          const drawRate = rand() < 0.025; // 2.5% draws
-          if (drawRate) {
-            awayScore = Math.floor(rand() * 5) + 2;
-            homeScore = awayScore;
-          } else {
-            const homeWins = rand() < 0.525;
-            if (homeWins) {
-              homeScore = Math.floor(rand() * 8) + 3;
-              awayScore = Math.floor(rand() * homeScore);
-            } else {
-              awayScore = Math.floor(rand() * 8) + 3;
-              homeScore = Math.floor(rand() * awayScore);
-            }
-          }
-        } else if (dateStr === '2026-06-28' && rand() < 0.5) {
-          // Half of today's matches are completed
-          status = 'completed';
-          homeScore = Math.floor(rand() * 6) + 2;
-          awayScore = Math.floor(rand() * 5);
-        }
-
-        games.push({
-          date: dateStr,
-          time: '18:30',
-          away: game.away,
-          home: game.home,
-          awayScore,
-          homeScore,
-          stadium: stadiums[Math.floor(rand() * stadiums.length)],
-          status,
-        });
-
-        matchupIdx++;
-      } else {
-        // No conflict-free games available for today, skip to next day
-        break;
-      }
-    }
-
-    matchDay++;
-  }
-
-  console.log(`[parseSchedule] Generated ${games.length} fallback games.`);
-  return games;
+  console.log('[parseSchedule] [CALL] generateFallbackSchedule - Returning bundled fallback schedule...');
+  return fallbackSchedule2026;
 }
 
 /**
@@ -320,6 +192,11 @@ async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGa
     params.append('gameMonth', monthStr);
     params.append('teamId', '');
 
+    const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+    const timeoutMs = isProd ? 3000 : 8000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -328,8 +205,11 @@ async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGa
         'Referer': 'https://www.koreabaseball.com/Schedule/Schedule.aspx',
         'X-Requested-With': 'XMLHttpRequest'
       },
-      body: params.toString()
+      body: params.toString(),
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`HTTP status error: ${response.status} ${response.statusText}`);
@@ -446,8 +326,8 @@ export async function getFullSeasonSchedule(year: number, forceRefresh = false):
   console.log(`[parseSchedule] Completed parallel schedule retrieval. Successful months: ${successfulMonthsCount}/8. Total games fetched: ${allGames.length}`);
 
   if (allGames.length === 0) {
-    console.log(`[parseSchedule] Crawled 0 games overall. Engaging fallback database generator...`);
-    return generateFallbackSchedule();
+    console.log(`[parseSchedule] Crawled 0 games overall. Engaging bundled fallback schedule...`);
+    return fallbackSchedule2026;
   }
 
   return allGames;
@@ -474,11 +354,11 @@ export async function getRemainingSchedule(fromDateStr: string, forceRefresh = f
   let errorMessage: string | undefined = undefined;
 
   // Detect fallback sources
-  const isFallback = allGames.some(g => g.stadium === 'NEUTRAL' || g.synthetic) || allGames.length === 720; // fallback has 720 games
+  const isFallback = allGames === fallbackSchedule2026 || allGames.length === 720;
   if (isFallback) {
-    source = 'fallback-sample';
+    source = 'bundled-fallback';
     errorType = '샘플 데이터 사용';
-    errorMessage = '공식 일정을 가져올 수 없어 내장 샘플 일정을 사용합니다.';
+    errorMessage = '공식 일정을 가져올 수 없어 내장 번들 예비 일정 데이터셋을 사용합니다.';
   }
 
   // 1. Upcoming matches: scheduled games *after* fromDateStr

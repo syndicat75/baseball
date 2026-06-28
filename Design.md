@@ -40,17 +40,19 @@ KBO 공식 웹사이트의 가용 데이터 수집(Scraping/Parsing), 일 단위
 
 ### 2.1 Backend / API Endpoints (Vercel Serverless API)
 - `/api/health.ts`: 서버 상태 점검 엔드포인트
-- `/api/kbo/standings.ts`: 특정 날짜 기준 순위 정보 및 상대 전적 데이터 조회 엔드포인트
-- `/api/kbo/schedule.ts`: 특정 날짜 기준 잔여 경기 일정 조회 엔드포인트
-- `/api/simulate.ts`: 지정 시점을 기준으로 몬테카를로 시뮬레이션 계산 구동 엔드포인트
+- `/api/kbo/standings.ts`: 특정 날짜 기준 순위 정보 및 상대 전적 데이터 조회 엔드포인트 (실패 시 `bundled-fallback` 반환)
+- `/api/kbo/schedule.ts`: 특정 날짜 기준 잔여 경기 일정 조회 엔드포인트 (실패 시 `bundled-fallback` 반환)
+- `/api/simulate.ts`: 지정 시점을 기준으로 몬테카를로 시뮬레이션 계산 구동 엔드포인트 (10,000회 연산 강제 최적화 탑재)
 
 ### 2.2 Core Logic Module (TypeScript)
 - `src/config.ts`: 전역 상수, 팀 메타데이터, 캐시 TTL, API 엔드포인트 주소 등 설정 집중화
 - `src/types.ts`: KBO 관련 데이터 모델 및 시뮬레이션 결과 타입 선언
-- `src/lib/kbo/fetchKboPage.ts`: 크롤링 타임아웃(8초), 재시도(Retry), 에이전트 헤더가 적용된 안전한 네트워크 요청 모듈
-- `src/lib/kbo/parseStandings.ts`: KBO 순위 HTML 테이블 파서 및 텍스트 정규식 파서(이중 안전장치 탑재)
-- `src/lib/kbo/parseSchedule.ts`: KBO 공식 AJAX 웹 서비스를 활용한 정밀 월별 일정 수집 및 매치업 파싱 모듈
-- `src/lib/kbo/buildSnapshotByDate.ts`: 특정 날짜 시점의 경기 결과를 역추적하여 순위표와 상대 전적을 완벽 재구성하는 모듈
+- `src/data/fallbackStandings2026.ts`: KBO 2026 가상 시즌 고품질 순위 및 상대 전적 정적 데이터셋 번들
+- `src/data/fallbackSchedule2026.ts`: KBO 2026 가상 시즌 720경기 결정론적 세부 일정 데이터셋 번들
+- `src/lib/kbo/fetchKboPage.ts`: 크롤링 타임아웃(로컬 8초 / 프로덕션 2.5초), 재시도(로컬 1회 / 프로덕션 0회) 환경별 최적화 모듈
+- `src/lib/kbo/parseStandings.ts`: KBO 순위 HTML 테이블 파서 및 텍스트 정규식 파서(이중 안전장치 및 10개 구단 정합성 검증 탑재)
+- `src/lib/kbo/parseSchedule.ts`: KBO 공식 AJAX 웹 서비스를 활용한 정밀 월별 일정 수집 및 매치업 파싱 모듈 (월별 AbortController 3초 제한 탑재)
+- `src/lib/kbo/buildSnapshotByDate.ts`: 오늘/미래 날짜 시 즉시 parseStandings를 반환하고, 과거 시점에만 전체 시즌 일정 역추적을 시도하는 고속 스냅샷 구성 모듈
 - `src/lib/kbo/cache.ts`: 서버리스 메모리 압박을 피하기 위한 간단한 인메모리 시간 기반 TTL 캐시
 - `src/lib/simulation/simulateSeason.ts`: 몬테카를로 시뮬레이션 엔진 (누적 승률/균등 확률/하이브리드 모델 지원)
 
