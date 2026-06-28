@@ -1,9 +1,25 @@
 {
-  "lastUpdateAttempt": "2026-06-28T14:28:35.801Z",
-  "lastSuccess": "2026-06-28T14:28:35.801Z",
+  "lastUpdateAttempt": "2026-06-28T21:10:31.138Z",
+  "lastSuccess": "2026-06-28T21:10:31.138Z",
   "status": "success",
-  "primarySource": "official-kbo-en",
-  "sourceLabel": "KBO 공식 영문 데이터",
-  "failedSources": [],
-  "warnings": []
+  "primarySource": "static-json",
+  "sourceLabel": "예약 수집 JSON 데이터",
+  "failedSources": [
+    {
+      "source": "official-kbo-en",
+      "reason": "KBO English site Daily Schedule does not provide full season schedule data."
+    },
+    {
+      "source": "mykbostats",
+      "reason": "MyKBOStats does not provide full season schedule data."
+    },
+    {
+      "source": "aiscore",
+      "reason": "AiScore does not provide full season schedule data."
+    }
+  ],
+  "warnings": [
+    "기본 소스(KBO 공식 영문) 일정 수집 실패로 인해 보조 소스(번들 로컬 예비 데이터)로 대체 연동되었습니다.",
+    "일정 데이터 정합성 불일치로 인해 순위표 기준 144경기 자동 보정 일정을 생성하여 적용했습니다."
+  ]
 }
