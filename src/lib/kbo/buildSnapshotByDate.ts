@@ -5,8 +5,9 @@
  */
 
 import { CONFIG } from '../../config';
-import { parseStandings, KBOStandingsResult, StandingsTeam } from './parseStandings';
-import { getSchedule, KBOGame } from './parseSchedule';
+import { parseStandings } from './parseStandings';
+import { getSchedule } from './parseSchedule';
+import { KBOStandingsResult, StandingsTeam, KBOGame } from '../../types';
 
 /**
  * Rebuilds team standings and head-to-head records from scratch by accumulating game results from the schedule.

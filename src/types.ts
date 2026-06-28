@@ -29,6 +29,10 @@ export interface SimulationResponse {
   iterations: number;
   model: ProbabilityModelType;
   results: TeamSimulationStats[];
+  unresolvedGames?: KBOGame[];
+  source?: string;
+  errorType?: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용';
+  errorMessage?: string;
 }
 
 export interface KBOGame {
@@ -48,6 +52,9 @@ export interface KBOScheduleResult {
   from: string;
   games: KBOGame[];
   unresolvedGames: KBOGame[];
+  source?: string;
+  errorType?: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용';
+  errorMessage?: string;
 }
 
 export interface StandingsTeam {
@@ -66,4 +73,6 @@ export interface KBOStandingsResult {
   source: string;
   teams: StandingsTeam[];
   headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>>;
+  errorType?: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용';
+  errorMessage?: string;
 }

@@ -4,11 +4,9 @@
  * Precomputes match probabilities, runs highly optimized simulation loops, and aggregates outcomes.
  */
 
-import { KBOGame } from '../kbo/parseSchedule';
-import { KBOStandingsResult, StandingsTeam } from '../kbo/parseStandings';
+import { KBOGame, KBOStandingsResult, StandingsTeam, SimulationOptions, TeamSimulationStats, SimulationResponse } from '../../types';
 import { calculateLeagueDrawRate, calculateMatchProbabilities, MatchProbabilities } from './probabilityModel';
 import { resolveFinalStandings } from './ranking';
-import { SimulationOptions, TeamSimulationStats, SimulationResponse } from './types';
 
 /**
  * Deterministic Linear Congruential Generator (LCG) for reproducible simulation runs.

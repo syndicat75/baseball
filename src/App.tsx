@@ -40,6 +40,23 @@ export default function App() {
   const [simData, setSimData] = useState<FullSimulationData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
+  // Diagnostic state for step-by-step verification
+  const [diagnostic, setDiagnostic] = useState<{
+    status: 'idle' | 'running' | 'success' | 'failed';
+    health: 'idle' | 'checking' | 'ok' | 'fail';
+    standings: 'idle' | 'checking' | 'ok' | 'fail';
+    simulate: 'idle' | 'checking' | 'ok' | 'fail';
+    currentStep: string | null;
+    errorDetails: string | null;
+  }>({
+    status: 'idle',
+    health: 'idle',
+    standings: 'idle',
+    simulate: 'idle',
+    currentStep: null,
+    errorDetails: null,
+  });
+
   /**
    * Fetches simulation results and standings snapshots from the backend.
    * 
@@ -66,6 +83,101 @@ export default function App() {
     } catch (err: any) {
       console.error(`[App] Error in fetchSimulationResults:`, err);
       setError('공식 KBO 데이터 수집에 실패했습니다. 잠시 후 다시 시도하거나 캐시된 데이터를 사용하세요.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Runs sequential diagnostics and retries data fetching.
+   * Tests /api/health, /api/kbo/standings, and /api/simulate in order.
+   * Reports exactly where any failure occurs.
+   */
+  const runDiagnosticsAndRetry = async () => {
+    console.log('[App] runDiagnosticsAndRetry called.');
+    setDiagnostic({
+      status: 'running',
+      health: 'checking',
+      standings: 'idle',
+      simulate: 'idle',
+      currentStep: '1단계: API 서버 상태 확인 (/api/health)...',
+      errorDetails: null,
+    });
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Step 1: Health Check
+      const healthRes = await fetch('/api/health');
+      if (!healthRes.ok) {
+        throw new Error(`API 헬스체크 실패 (상태 코드: ${healthRes.status}). API route가 배포되지 않았거나 꺼져 있을 수 있습니다.`);
+      }
+      const healthData = await healthRes.json();
+      if (!healthData.ok) {
+        throw new Error('API 헬스체크 응답이 정상 범위(ok: true)를 벗어났습니다.');
+      }
+
+      setDiagnostic(prev => ({
+        ...prev,
+        health: 'ok',
+        standings: 'checking',
+        currentStep: '2단계: KBO 공식 standings 데이터 수집 검증 (/api/kbo/standings)...',
+      }));
+
+      // Step 2: Standings Check
+      const standingsRes = await fetch(`/api/kbo/standings?date=${selectedDate}`);
+      if (!standingsRes.ok) {
+        throw new Error(`KBO 순위 수집 API 호출 실패 (상태 코드: ${standingsRes.status}). KBO fetch 실패 또는 HTML parser 실패.`);
+      }
+      const standingsData = await standingsRes.json();
+      if (standingsData.errorType && standingsData.source === 'fallback-sample') {
+        throw new Error(`KBO 공식 데이터 파싱 실패: ${standingsData.errorType} (${standingsData.errorMessage || '상세 불명'})`);
+      }
+
+      setDiagnostic(prev => ({
+        ...prev,
+        standings: 'ok',
+        simulate: 'checking',
+        currentStep: '3단계: 전체 시즌 시뮬레이션 계산 검증 (/api/simulate)...',
+      }));
+
+      // Step 3: Simulation Check
+      const simulateRes = await fetch(`/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`);
+      if (!simulateRes.ok) {
+        throw new Error(`시뮬레이션 API 호출 실패 (상태 코드: ${simulateRes.status}). 시뮬레이션 연산 중 오류 발생.`);
+      }
+      const simulateData = await simulateRes.json();
+      
+      setSimData(simulateData);
+      setLastUpdated(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+      setDiagnostic({
+        status: 'success',
+        health: 'ok',
+        standings: 'ok',
+        simulate: 'ok',
+        currentStep: '자가진단 완료: 모든 API 및 계산 기능이 100% 정상 작동합니다!',
+        errorDetails: null,
+      });
+    } catch (err: any) {
+      console.error('[App] Diagnostic failed:', err);
+      const errMsg = err?.message || String(err);
+      
+      setDiagnostic(prev => {
+        const nextHealth = prev.health === 'checking' ? 'fail' : prev.health;
+        const nextStandings = prev.standings === 'checking' ? 'fail' : prev.standings;
+        const nextSimulate = prev.simulate === 'checking' ? 'fail' : prev.simulate;
+        
+        return {
+          status: 'failed',
+          health: nextHealth,
+          standings: nextStandings,
+          simulate: nextSimulate,
+          currentStep: '자가진단 및 통신 실패',
+          errorDetails: errMsg,
+        };
+      });
+      setError(`자가진단 실패: ${errMsg}`);
     } finally {
       setIsLoading(false);
     }
@@ -142,7 +254,7 @@ export default function App() {
 
         {/* Error Alert with fallback option */}
         {error && !isLoading && (
-          <div className="bg-red-50 border border-red-200 text-red-900 rounded-xl p-5 space-y-3 shadow-sm">
+          <div className="bg-red-50 border border-red-200 text-red-900 rounded-xl p-5 space-y-4 shadow-sm">
             <div className="flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
               <div className="space-y-1.5 flex-1">
@@ -155,13 +267,71 @@ export default function App() {
                 </p>
               </div>
             </div>
-            <div className="pl-8">
+
+            {/* Diagnostic Step-by-Step UI */}
+            {diagnostic.status !== 'idle' && (
+              <div className="bg-white border border-red-100 rounded-lg p-3 text-xs space-y-2 mt-2">
+                <h5 className="font-bold text-slate-700 flex items-center gap-1.5">
+                  🔍 시스템 자가진단 상태 ({diagnostic.status === 'running' ? '진행중' : diagnostic.status === 'success' ? '정상' : '실패'})
+                </h5>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <div className={`p-2 rounded border flex items-center justify-between ${
+                    diagnostic.health === 'ok' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
+                    diagnostic.health === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
+                    diagnostic.health === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
+                    'bg-slate-50 border-slate-100 text-slate-400'
+                  }`}>
+                    <span>1. API 헬스체크 (/api/health)</span>
+                    <strong className="font-black">
+                      {diagnostic.health === 'ok' ? '✓ OK' : diagnostic.health === 'fail' ? '✗ FAIL' : diagnostic.health === 'checking' ? '진행중...' : '대기'}
+                    </strong>
+                  </div>
+
+                  <div className={`p-2 rounded border flex items-center justify-between ${
+                    diagnostic.standings === 'ok' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
+                    diagnostic.standings === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
+                    diagnostic.standings === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
+                    'bg-slate-50 border-slate-100 text-slate-400'
+                  }`}>
+                    <span>2. KBO 수집 검증 (/api/kbo/standings)</span>
+                    <strong className="font-black">
+                      {diagnostic.standings === 'ok' ? '✓ OK' : diagnostic.standings === 'fail' ? '✗ FAIL' : diagnostic.standings === 'checking' ? '진행중...' : '대기'}
+                    </strong>
+                  </div>
+
+                  <div className={`p-2 rounded border flex items-center justify-between ${
+                    diagnostic.simulate === 'ok' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
+                    diagnostic.simulate === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
+                    diagnostic.simulate === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
+                    'bg-slate-50 border-slate-100 text-slate-400'
+                  }`}>
+                    <span>3. 시뮬레이션 계산 (/api/simulate)</span>
+                    <strong className="font-black">
+                      {diagnostic.simulate === 'ok' ? '✓ OK' : diagnostic.simulate === 'fail' ? '✗ FAIL' : diagnostic.simulate === 'checking' ? '진행중...' : '대기'}
+                    </strong>
+                  </div>
+                </div>
+                {diagnostic.currentStep && (
+                  <p className="text-[11px] text-blue-600 font-semibold mt-1">
+                    현재 상태: {diagnostic.currentStep}
+                  </p>
+                )}
+                {diagnostic.errorDetails && (
+                  <div className="bg-red-50 text-red-700 p-2 rounded border border-red-100 font-mono text-[10px] whitespace-pre-wrap">
+                    원인 분석: {diagnostic.errorDetails}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="pl-8 flex items-center gap-3">
               <button
-                onClick={() => fetchSimulationResults(false)}
-                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg shadow-sm border border-red-700 cursor-pointer transition-all"
+                onClick={runDiagnosticsAndRetry}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-lg shadow-sm border border-red-700 cursor-pointer transition-all flex items-center gap-1.5"
                 id="retry-fetch-btn"
               >
-                네트워크 통신 재시도
+                <RefreshCw className="w-3.5 h-3.5" />
+                네트워크 통신 자가진단 및 재시도
               </button>
             </div>
           </div>

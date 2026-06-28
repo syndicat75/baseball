@@ -6,24 +6,7 @@
 import * as cheerio from 'cheerio';
 import { normalizeTeamName } from './normalizeTeamName';
 import { CONFIG } from '../../config';
-
-export interface StandingsTeam {
-  team: string;          // Normalised code, e.g. "LG"
-  nameKo: string;        // Korean name for display
-  games: number;         // Total games played
-  wins: number;          // Wins
-  losses: number;        // Losses
-  draws: number;         // Draws
-  winRate: number;       // Win rate
-  rank: number;          // Current rank
-}
-
-export interface KBOStandingsResult {
-  asOfDate: string;
-  source: 'official-kbo' | 'fallback-sample';
-  teams: StandingsTeam[];
-  headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>>;
-}
+import { StandingsTeam, KBOStandingsResult } from '../../types';
 
 /**
  * Returns realistic fallback/sample standings for testing or emergency recovery if KBO is down.
@@ -268,9 +251,18 @@ export async function parseStandings(dateStr: string): Promise<KBOStandingsResul
       headToHead,
     };
 
-  } catch (error) {
+  } catch (error: any) {
     console.error(`[parseStandings] Parsing standings failed:`, error);
-    // Return mock standings so the server keeps functioning gracefully
-    return getFallbackStandings(dateStr);
+    const fallback = getFallbackStandings(dateStr);
+    const msg = error?.message || String(error);
+    const errorType = (msg.includes('status') || msg.includes('fetch') || msg.includes('network') || msg.includes('connect'))
+      ? 'KBO fetch 실패'
+      : 'HTML parser 실패';
+    return {
+      ...fallback,
+      source: 'fallback-sample',
+      errorType,
+      errorMessage: msg,
+    };
   }
 }

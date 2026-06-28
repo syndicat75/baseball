@@ -4,9 +4,7 @@
  * Uses historical records, recent form, head-to-head records, and home advantages to project match outcomes.
  */
 
-import { KBOGame } from '../kbo/parseSchedule';
-import { StandingsTeam } from '../kbo/parseStandings';
-import { ProbabilityModelType } from './types';
+import { KBOGame, StandingsTeam, ProbabilityModelType } from '../../types';
 
 export interface MatchProbabilities {
   awayWin: number;  // 0.0 - 1.0

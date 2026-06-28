@@ -9,24 +9,7 @@ import { normalizeTeamName } from './normalizeTeamName';
 import { CONFIG } from '../../config';
 import { getCache, setCache } from './cache';
 
-export interface KBOGame {
-  date: string;          // YYYY-MM-DD
-  time: string;          // HH:MM
-  away: string;          // Normalised code, e.g. "LOTTE"
-  home: string;          // Normalised code, e.g. "DOOSAN"
-  awayScore: number | null;
-  homeScore: number | null;
-  stadium: string;
-  status: 'completed' | 'scheduled' | 'postponed';
-  synthetic?: boolean;    // If generated for unresolved postponed games
-  reason?: string;
-}
-
-export interface KBOScheduleResult {
-  from: string;
-  games: KBOGame[];
-  unresolvedGames: KBOGame[];
-}
+import { KBOGame, KBOScheduleResult } from '../../types';
 
 /**
  * Parses a single matchup text cell into scores and team designations.
@@ -377,16 +360,34 @@ export async function getSchedule(fromDateStr: string, forceRefresh = false): Pr
   const today = new Date(fromDateStr);
   const year = today.getFullYear();
   let allGames: KBOGame[] = [];
+  let fetchedAny = false;
+  let cachedAny = false;
 
   for (let m = 3; m <= 10; m++) {
+    const monthStr = m.toString().padStart(2, '0');
+    const cached = await getCache<KBOGame[]>(`schedule_${year}_${monthStr}`, 30 * 24 * 60 * 60 * 1000);
+    if (cached) {
+      cachedAny = true;
+    } else {
+      fetchedAny = true;
+    }
     const monthGames = await parseKboMonthSchedule(year, m);
     allGames.push(...monthGames);
   }
+
+  let source = 'official-kbo';
+  let errorType: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용' | undefined = undefined;
+  let errorMessage: string | undefined = undefined;
 
   // Fallback if we crawled absolutely nothing (e.g. offline/blocked)
   if (allGames.length === 0) {
     console.log(`[getSchedule] Crawled 0 games from official KBO web. Engaging fallback database generator...`);
     allGames = generateFallbackSchedule();
+    source = 'fallback-sample';
+    errorType = '샘플 데이터 사용';
+    errorMessage = '공식 일정을 가져올 수 없어 내장 샘플 일정을 사용합니다.';
+  } else if (cachedAny && !fetchedAny) {
+    errorType = '캐시 데이터 사용';
   }
 
   // Now, process games based on fromDateStr
@@ -450,5 +451,8 @@ export async function getSchedule(fromDateStr: string, forceRefresh = false): Pr
     from: fromDateStr,
     games: upcomingGames,
     unresolvedGames,
+    source,
+    errorType,
+    errorMessage,
   };
 }
