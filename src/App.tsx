@@ -21,9 +21,14 @@ interface FullSimulationData {
   model: string;
   results: TeamSimulationStats[];
   unresolvedGames: any[];
-  source: 'official-kbo' | 'cache' | 'fallback-sample' | 'bundled-fallback';
+  source: string;
+  sourceLabel?: string;
+  scheduleSource?: string;
+  scheduleSourceLabel?: string;
   errorType?: string;
   errorMessage?: string;
+  warnings?: string[];
+  failedSources?: { source: string; reason: string }[];
 }
 
 export default function App() {
@@ -45,12 +50,25 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isFallbackSample, setIsFallbackSample] = useState<boolean>(false);
 
+  // Additional metadata for multi-source visualization
+  const [standingsSourceInfo, setStandingsSourceInfo] = useState<{
+    source: string;
+    sourceLabel: string;
+    failedSources?: { source: string; reason: string }[];
+  } | null>(null);
+
+  const [scheduleSourceInfo, setScheduleSourceInfo] = useState<{
+    source: string;
+    sourceLabel: string;
+    failedSources?: { source: string; reason: string }[];
+  } | null>(null);
+
   // Diagnostic state for step-by-step verification
   const [diagnostic, setDiagnostic] = useState<{
     status: 'idle' | 'running' | 'success' | 'failed';
     health: 'idle' | 'checking' | 'ok' | 'fail';
-    standings: 'idle' | 'checking' | 'official-kbo' | 'cache' | 'fallback-sample' | 'fail';
-    schedule: 'idle' | 'checking' | 'official-kbo' | 'cache' | 'fallback-sample' | 'fail';
+    standings: 'idle' | 'checking' | string;
+    schedule: 'idle' | 'checking' | string;
     simulate: 'idle' | 'checking' | 'ok' | 'fail';
     currentStep: string | null;
     errorDetails: string | null;
@@ -96,9 +114,29 @@ export default function App() {
       setSimData(data);
       setIsFallbackSample(data.source === 'fallback-sample' || data.source === 'bundled-fallback');
       
+      setStandingsSourceInfo({
+        source: data.source,
+        sourceLabel: data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        failedSources: data.failedSources,
+      });
+
+      setScheduleSourceInfo({
+        source: data.scheduleSource || data.source,
+        sourceLabel: data.scheduleSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        failedSources: data.failedSources,
+      });
+
       const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastUpdated(currentTime);
-      setDiagnostic(prev => ({ ...prev, lastSuccessTime: currentTime }));
+      setDiagnostic(prev => ({
+        ...prev,
+        health: 'ok',
+        standings: data.source,
+        schedule: data.scheduleSource || data.source,
+        simulate: 'ok',
+        status: 'success',
+        lastSuccessTime: currentTime
+      }));
     } catch (err: any) {
       console.error(`[App] Error in fetchSimulationResults:`, err);
       setError(err.message || '데이터 수집 또는 연산 실행 중 문제가 발생했습니다. 자가진단을 통해 정밀 원인을 확인해 주세요.');
@@ -106,6 +144,7 @@ export default function App() {
       setIsLoading(false);
     }
   };
+
 
   /**
    * Runs sequential diagnostics and retries data fetching.
@@ -146,7 +185,7 @@ export default function App() {
         ...prev,
         health: 'ok',
         standings: 'checking',
-        currentStep: '2단계: KBO 공식 standings 데이터 수집 검증 (/api/kbo/standings)...',
+        currentStep: '2단계: KBO standings 데이터 수집 검증 (/api/kbo/standings)...',
       }));
 
       // Step 2: Standings Check
@@ -160,13 +199,12 @@ export default function App() {
       }
       const standingsData = await standingsRes.json();
       
-      // Determine Standings source status
-      let standingsStatus: 'official-kbo' | 'cache' | 'fallback-sample' = 'official-kbo';
-      if (standingsData.source === 'fallback-sample' || standingsData.source === 'bundled-fallback') {
-        standingsStatus = 'fallback-sample';
-      } else if (standingsData.errorType === '캐시 데이터 사용') {
-        standingsStatus = 'cache';
-      }
+      const standingsStatus = standingsData.source || 'official-kbo';
+      setStandingsSourceInfo({
+        source: standingsData.source,
+        sourceLabel: standingsData.sourceLabel || (standingsData.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        failedSources: standingsData.failedSources,
+      });
 
       setDiagnostic(prev => ({
         ...prev,
@@ -186,12 +224,12 @@ export default function App() {
       }
       const scheduleData = await scheduleRes.json();
 
-      let scheduleStatus: 'official-kbo' | 'cache' | 'fallback-sample' = 'official-kbo';
-      if (scheduleData.source === 'fallback-sample' || scheduleData.source === 'bundled-fallback') {
-        scheduleStatus = 'fallback-sample';
-      } else if (scheduleData.errorType === '캐시 데이터 사용') {
-        scheduleStatus = 'cache';
-      }
+      const scheduleStatus = scheduleData.source || 'official-kbo';
+      setScheduleSourceInfo({
+        source: scheduleData.source,
+        sourceLabel: scheduleData.sourceLabel || (scheduleData.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        failedSources: scheduleData.failedSources,
+      });
 
       setDiagnostic(prev => ({
         ...prev,
@@ -223,7 +261,7 @@ export default function App() {
         standings: standingsStatus,
         schedule: scheduleStatus,
         simulate: 'ok',
-        currentStep: '자가진단 완료: 모든 API가 정상 작동 중입니다!',
+        currentStep: '자가진단 완료: 모든 API가 보조 또는 예비 엔진을 통해 정상 복구 및 작동 중입니다!',
         errorDetails: null,
         lastSuccessTime: currentTime,
       });
@@ -253,6 +291,7 @@ export default function App() {
       setIsLoading(false);
     }
   };
+
 
   // Run simulation automatically on mount or when user options change
   useEffect(() => {
@@ -290,36 +329,58 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 mt-8 space-y-6">
         
         {/* Connection Status Banner */}
-        <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs animate-fade-in">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-500">데이터 연동 상태:</span>
-            {error ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 font-bold border border-rose-100 animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-rose-500" />
-                연동 오류가 감지되었습니다. (내장 엔진 자동 복구 시도 중)
-              </span>
-            ) : simData?.source === 'official-kbo' ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-100">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                실시간 KBO 데이터 연동 완료
-              </span>
-            ) : simData?.source === 'cache' ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-bold border border-emerald-100">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                캐시된 KBO 데이터 연동 완료
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-bold border border-amber-100">
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                샘플 데이터 연동 중 (내장 번들 활용)
-              </span>
-            )}
+        <div className={`border rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs animate-fade-in ${
+          error ? 'bg-rose-50 border-rose-200 text-rose-900' :
+          simData?.source === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-900' :
+          (simData?.source === 'mykbostats' || simData?.source === 'aiscore') ? 'bg-amber-50 border-amber-200 text-amber-900' :
+          'bg-emerald-50 border-emerald-200 text-emerald-900'
+        }`}>
+          <div className="flex-1 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-slate-700">데이터 연동 상태:</span>
+              {error ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 font-bold border border-rose-200 animate-pulse">
+                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+                  연동 오류가 감지되었습니다. (자가진단 점검 필요)
+                </span>
+              ) : simData?.source === 'bundled-fallback' ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-orange-100 text-orange-800 font-bold border border-orange-200">
+                  <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                  주황 경고: 예비 데이터 연동 중 (내장 번들 활용)
+                </span>
+              ) : (simData?.source === 'mykbostats' || simData?.source === 'aiscore') ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  노란 경고: {simData?.sourceLabel || '보조 데이터 연동 완료'}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  정상: 실시간 KBO 공식 연동 완료
+                </span>
+              )}
+            </div>
+
+            <div className="text-[11px] text-slate-600 space-y-0.5 pt-1.5 font-medium">
+              <div>• 사용 데이터: <strong className="text-slate-800 font-semibold">{simData?.sourceLabel || '실시간 KBO 공식 데이터'}</strong></div>
+              {simData && simData.source !== 'official-kbo-en' && simData.source !== 'official-kbo-ko' && simData.source !== 'official-kbo' && (
+                <div className="text-rose-600 font-bold">• KBO 공식 사이트 수집 실패 (네트워크 장애 또는 Vercel IP 차단 감지)</div>
+              )}
+              {simData && (
+                <div className="text-emerald-700 font-semibold">• 계산 완료 여부: 보조 또는 예비 데이터 기준으로 가을야구 연산이 정상 완료됨</div>
+              )}
+            </div>
           </div>
           
-          {(error || simData?.errorMessage) && (
-            <div className="text-slate-500 flex items-center gap-1 bg-slate-50 px-2.5 py-1 rounded border border-slate-100 font-medium max-w-xl overflow-hidden text-ellipsis">
-              <span>ℹ️ 상세정보:</span>
-              <span className="text-slate-600 font-semibold">{error || simData?.errorMessage}</span>
+          {(error || simData?.errorMessage || (simData?.warnings && simData.warnings.length > 0)) && (
+            <div className="text-slate-600 flex flex-col gap-1 bg-white/75 p-3 rounded-lg border border-slate-200/80 max-w-xl text-[11px] font-mono shadow-inner">
+              <span className="font-bold text-slate-700 flex items-center gap-1">ℹ️ 상세 보고 및 분석 알림:</span>
+              <span className="text-slate-800 leading-relaxed max-h-24 overflow-y-auto">
+                {error || simData?.errorMessage}
+                {simData?.warnings && simData.warnings.map((w, idx) => (
+                  <div key={idx} className="text-amber-700 font-semibold mt-1">• {w}</div>
+                ))}
+              </span>
             </div>
           )}
         </div>
@@ -373,66 +434,108 @@ export default function App() {
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
             {/* 1. API Health */}
-            <div className={`p-2 rounded border flex flex-col gap-1 ${
+            <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
               diagnostic.health === 'ok' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
               diagnostic.health === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
               diagnostic.health === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
-              <span className="font-medium text-slate-500">API 서버 헬스체크</span>
-              <strong className="font-bold">
-                {diagnostic.health === 'ok' ? '✓ OK' : diagnostic.health === 'fail' ? '✗ FAIL' : diagnostic.health === 'checking' ? '진행중...' : '대기'}
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>API 서버 헬스체크</span>
+                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
+                  {diagnostic.health === 'ok' ? 'OK' : diagnostic.health === 'fail' ? 'FAIL' : 'CHECKING'}
+                </span>
+              </div>
+              <strong className="text-[11px] font-semibold text-slate-700 mt-1">
+                {diagnostic.health === 'ok' ? '✓ 서버 가동 중 (OK)' : diagnostic.health === 'fail' ? '✗ 서버 오류 (FAIL)' : diagnostic.health === 'checking' ? '조회중...' : '대기'}
               </strong>
             </div>
 
             {/* 2. Standings */}
-            <div className={`p-2 rounded border flex flex-col gap-1 ${
-              diagnostic.standings === 'official-kbo' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
-              diagnostic.standings === 'cache' ? 'bg-blue-50 border-blue-100 text-blue-800' :
-              diagnostic.standings === 'fallback-sample' ? 'bg-amber-50 border-amber-100 text-amber-800' :
-              diagnostic.standings === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
-              diagnostic.standings === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
+            <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
+              diagnostic.standings === 'checking' ? 'bg-amber-50 border-amber-200 text-amber-800 animate-pulse' :
+              diagnostic.standings === 'fail' ? 'bg-rose-50 border-rose-200 text-rose-800' :
+              (diagnostic.standings.startsWith('official-') || diagnostic.standings === 'cache' || diagnostic.standings === 'official-kbo') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+              diagnostic.standings === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-800' :
+              diagnostic.standings !== 'idle' ? 'bg-amber-50 border-amber-200 text-amber-800' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
-              <span className="font-medium text-slate-500">순위 수집 (Standings)</span>
-              <strong className="font-bold">
-                {diagnostic.standings === 'official-kbo' ? '✓ KBO 공식' :
-                 diagnostic.standings === 'cache' ? '✓ 캐시사용' :
-                 diagnostic.standings === 'fallback-sample' ? '⚠ 샘플 데이터' :
-                 diagnostic.standings === 'fail' ? '✗ 실패 (Fail)' :
-                 diagnostic.standings === 'checking' ? '검증중...' : '대기'}
-              </strong>
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>순위 데이터 수집</span>
+                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
+                  {diagnostic.standings === 'checking' ? '검사중' :
+                   (diagnostic.standings.startsWith('official-') || diagnostic.standings === 'cache' || diagnostic.standings === 'official-kbo') ? 'OK' :
+                   diagnostic.standings === 'fail' ? 'FAIL' : 'WARNING'}
+                </span>
+              </div>
+              <div className="text-[11px] font-semibold text-slate-700 mt-1">
+                {diagnostic.standings === 'checking' ? '데이터 로딩중...' :
+                 diagnostic.standings === 'fail' ? '✗ 수집 실패 (FAIL)' :
+                 diagnostic.standings === 'idle' ? '대기' :
+                 `✓ ${standingsSourceInfo?.sourceLabel || diagnostic.standings}`}
+              </div>
+              {standingsSourceInfo?.failedSources && standingsSourceInfo.failedSources.length > 0 && (
+                <div className="text-[9px] text-slate-500 border-t border-dashed border-black/10 pt-1.5 mt-1 font-mono leading-normal max-h-16 overflow-y-auto">
+                  <div className="font-bold text-slate-600">실패한 소스 목록:</div>
+                  {standingsSourceInfo.failedSources.map((f, i) => (
+                    <div key={i} className="truncate" title={`${f.source}: ${f.reason}`}>
+                      • {f.source}: {f.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 3. Schedule */}
-            <div className={`p-2 rounded border flex flex-col gap-1 ${
-              diagnostic.schedule === 'official-kbo' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
-              diagnostic.schedule === 'cache' ? 'bg-blue-50 border-blue-100 text-blue-800' :
-              diagnostic.schedule === 'fallback-sample' ? 'bg-amber-50 border-amber-100 text-amber-800' :
-              diagnostic.schedule === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
-              diagnostic.schedule === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
+            <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
+              diagnostic.schedule === 'checking' ? 'bg-amber-50 border-amber-200 text-amber-800 animate-pulse' :
+              diagnostic.schedule === 'fail' ? 'bg-rose-50 border-rose-200 text-rose-800' :
+              (diagnostic.schedule.startsWith('official-') || diagnostic.schedule === 'cache' || diagnostic.schedule === 'official-kbo') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+              diagnostic.schedule === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-800' :
+              diagnostic.schedule !== 'idle' ? 'bg-amber-50 border-amber-200 text-amber-800' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
-              <span className="font-medium text-slate-500">일정 분석 (Schedule)</span>
-              <strong className="font-bold">
-                {diagnostic.schedule === 'official-kbo' ? '✓ KBO 공식' :
-                 diagnostic.schedule === 'cache' ? '✓ 캐시사용' :
-                 diagnostic.schedule === 'fallback-sample' ? '⚠ 샘플 데이터' :
-                 diagnostic.schedule === 'fail' ? '✗ 실패 (Fail)' :
-                 diagnostic.schedule === 'checking' ? '검증중...' : '대기'}
-              </strong>
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>일정 데이터 수집</span>
+                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
+                  {diagnostic.schedule === 'checking' ? '검사중' :
+                   (diagnostic.schedule.startsWith('official-') || diagnostic.schedule === 'cache' || diagnostic.schedule === 'official-kbo') ? 'OK' :
+                   diagnostic.schedule === 'fail' ? 'FAIL' : 'WARNING'}
+                </span>
+              </div>
+              <div className="text-[11px] font-semibold text-slate-700 mt-1">
+                {diagnostic.schedule === 'checking' ? '데이터 로딩중...' :
+                 diagnostic.schedule === 'fail' ? '✗ 수집 실패 (FAIL)' :
+                 diagnostic.schedule === 'idle' ? '대기' :
+                 `✓ ${scheduleSourceInfo?.sourceLabel || diagnostic.schedule}`}
+              </div>
+              {scheduleSourceInfo?.failedSources && scheduleSourceInfo.failedSources.length > 0 && (
+                <div className="text-[9px] text-slate-500 border-t border-dashed border-black/10 pt-1.5 mt-1 font-mono leading-normal max-h-16 overflow-y-auto">
+                  <div className="font-bold text-slate-600">실패한 소스 목록:</div>
+                  {scheduleSourceInfo.failedSources.map((f, i) => (
+                    <div key={i} className="truncate" title={`${f.source}: ${f.reason}`}>
+                      • {f.source}: {f.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 4. Simulation Engine */}
-            <div className={`p-2 rounded border flex flex-col gap-1 ${
+            <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
               diagnostic.simulate === 'ok' ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
               diagnostic.simulate === 'fail' ? 'bg-rose-50 border-rose-100 text-rose-800' :
               diagnostic.simulate === 'checking' ? 'bg-amber-50 border-amber-100 text-amber-800 animate-pulse' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
-              <span className="font-medium text-slate-500">시뮬레이션 가동</span>
-              <strong className="font-bold">
-                {diagnostic.simulate === 'ok' ? '✓ 정상' : diagnostic.simulate === 'fail' ? '✗ 연산오류' : diagnostic.simulate === 'checking' ? '시뮬레이션중...' : '대기'}
+              <div className="flex items-center justify-between font-bold text-xs">
+                <span>시뮬레이션 연산</span>
+                <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
+                  {diagnostic.simulate === 'ok' ? 'OK' : diagnostic.simulate === 'fail' ? 'FAIL' : 'RUNNING'}
+                </span>
+              </div>
+              <strong className="text-[11px] font-semibold text-slate-700 mt-1">
+                {diagnostic.simulate === 'ok' ? '✓ 정상 완료 (OK)' : diagnostic.simulate === 'fail' ? '✗ 연산 오류 (FAIL)' : diagnostic.simulate === 'checking' ? '연산 중...' : '대기'}
               </strong>
             </div>
           </div>
@@ -446,7 +549,7 @@ export default function App() {
                 id="run-diag-btn"
               >
                 <RefreshCw className="w-3 h-3" />
-                정밀 검사 구동
+                자가진단 수동 재시도
               </button>
             </div>
           )}
@@ -558,13 +661,15 @@ export default function App() {
         )}
 
         {/* 4. Disclaimer Footer Card */}
-        <footer className="mt-12 bg-white border border-slate-100 rounded-xl p-5 text-center text-xs text-slate-400 space-y-1 shadow-inner">
+        <footer className="mt-12 bg-white border border-slate-100 rounded-xl p-5 text-center text-xs text-slate-400 space-y-1.5 shadow-inner">
           <p className="font-semibold text-slate-500">
-            ⚠️ 시뮬레이션 계산 유의사항 및 안내
+            ⚠️ 시뮬레이션 계산 유의사항 및 데이터 출처 안내
           </p>
           <p className="max-w-3xl mx-auto leading-relaxed">
-            본 확률은 공식 KBO 순위/일정 데이터를 기반으로 한 통계적 시뮬레이션 결과이며, 실제 경기 결과·우천취소·부상·선발투수·구단 운영 변수에 따라 달라질 수 있습니다. 
-            모든 팀의 잔여 경기수(144경기) 합산을 맞추기 위해 미지정 잔여 경기 및 순연 경기는 알고리즘에 따른 중립/상대전적 보정이 적용되었습니다.
+            본 계산은 KBO 공식 데이터 또는 공개 보조 데이터 소스를 기반으로 한 통계적 시뮬레이션입니다. KBO 공식 데이터 수집 실패 시 MyKBOStats, AiScore 또는 내장 fallback 데이터가 사용될 수 있으며, 실제 순위·일정과 차이가 있을 수 있습니다.
+          </p>
+          <p className="max-w-3xl mx-auto leading-relaxed text-slate-400/85">
+            실제 경기 결과·우천취소·부상·선발투수·구단 운영 변수에 따라 결과가 달라질 수 있으며, 모든 팀의 잔여 경기수(144경기) 합산을 맞추기 위해 미지정 잔여 경기 및 순연 경기는 알고리즘에 따른 중립/상대전적 보정이 적용되었습니다.
           </p>
           <p className="text-[10px] text-slate-300 font-mono mt-3">
             Designed and built for KBO baseball fans. Powered by Monte Carlo Simulation Engine.

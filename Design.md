@@ -1,93 +1,117 @@
-# KBO 가을야구 진출 확률 계산기 설계 문서 (Design.md)
+# ⚾ KBO 가을야구 진출 확률 계산기 설계 문서 (Design.md)
 
-이 문서는 몬테카를로 시뮬레이션 기반의 KBO 프로야구 가을야구 진출 확률 계산기 애플리케이션의 아키텍처 및 세부 설계 사항을 문서화합니다.
-
----
-
-## 1. 전반적인 아키텍처 (Architecture Overview)
-
-본 애플리케이션은 **Vite + React (TypeScript) + Vercel Serverless Function**의 풀스택 웹 애플리케이션입니다.
-KBO 공식 웹사이트의 가용 데이터 수집(Scraping/Parsing), 일 단위 경기 일정의 재구성, 그리고 수만 회차의 병렬 몬테카를로 시뮬레이션을 통해 포스트시즌 진출 확률을 안정적이고 실시간으로 구동합니다.
-
-```
-+--------------------------------------------------------+
-|                      React UI                          |
-|  (App.tsx, DateControl, SimulationControls, Charts)    |
-+---------------------------+----------------------------+
-                            |
-                     /api/simulate
-                     /api/kbo/standings
-                     /api/kbo/schedule
-                            |
-                            v
-+--------------------------------------------------------+
-|              Vercel Serverless Functions               |
-|      (api/simulate.ts, api/kbo/standings.ts, ...)      |
-+---------------------------+----------------------------+
-                            |
-                            v
-+--------------------------------------------------------+
-|              KBO Data Fetch & Parser                   |
-|       (fetchKboPage, parseStandings, parseSchedule)     |
-+--------------------------------------------------------+
-```
+이 문서는 본 웹 애플리케이션의 아키텍처, 파일 구성, 다중 데이터 소스 연동 및 보정 체계, 몬테카를로 시뮬레이션 계산 모델에 대한 상세 기술 사양을 담고 있습니다.
 
 ---
 
-## 2. 파일 구조 및 모듈 분리 (Modular File Structure)
-
-코드가 너무 무거워져서 타임아웃이나 오류가 발생하는 것을 방지하기 위해 파일과 모듈을 엄격히 기능별로 격리했습니다.
-
-### 2.1 Backend / API Endpoints (Vercel Serverless API)
-- `/api/health.ts`: 서버 상태 점검 엔드포인트
-- `/api/kbo/standings.ts`: 특정 날짜 기준 순위 정보 및 상대 전적 데이터 조회 엔드포인트 (실패 시 `bundled-fallback` 반환)
-- `/api/kbo/schedule.ts`: 특정 날짜 기준 잔여 경기 일정 조회 엔드포인트 (실패 시 `bundled-fallback` 반환)
-- `/api/simulate.ts`: 지정 시점을 기준으로 몬테카를로 시뮬레이션 계산 구동 엔드포인트 (10,000회 연산 강제 최적화 탑재)
-
-### 2.2 Core Logic Module (TypeScript)
-- `src/config.ts`: 전역 상수, 팀 메타데이터, 캐시 TTL, API 엔드포인트 주소 등 설정 집중화
-- `src/types.ts`: KBO 관련 데이터 모델 및 시뮬레이션 결과 타입 선언
-- `src/data/fallbackStandings2026.ts`: KBO 2026 가상 시즌 고품질 순위 및 상대 전적 정적 데이터셋 번들
-- `src/data/fallbackSchedule2026.ts`: KBO 2026 가상 시즌 720경기 결정론적 세부 일정 데이터셋 번들
-- `src/lib/kbo/fetchKboPage.ts`: 크롤링 타임아웃(로컬 8초 / 프로덕션 2.5초), 재시도(로컬 1회 / 프로덕션 0회) 환경별 최적화 모듈
-- `src/lib/kbo/parseStandings.ts`: KBO 순위 HTML 테이블 파서 및 텍스트 정규식 파서(이중 안전장치 및 10개 구단 정합성 검증 탑재)
-- `src/lib/kbo/parseSchedule.ts`: KBO 공식 AJAX 웹 서비스를 활용한 정밀 월별 일정 수집 및 매치업 파싱 모듈 (월별 AbortController 3초 제한 탑재)
-- `src/lib/kbo/buildSnapshotByDate.ts`: 오늘/미래 날짜 시 즉시 parseStandings를 반환하고, 과거 시점에만 전체 시즌 일정 역추적을 시도하는 고속 스냅샷 구성 모듈
-- `src/lib/kbo/cache.ts`: 서버리스 메모리 압박을 피하기 위한 간단한 인메모리 시간 기반 TTL 캐시
-- `src/lib/simulation/simulateSeason.ts`: 몬테카를로 시뮬레이션 엔진 (누적 승률/균등 확률/하이브리드 모델 지원)
-
-### 2.3 Frontend UI Component
-- `src/App.tsx`: 최상단 조정 컴포넌트, 네트워크 정밀 자가진단(Self-Diagnostics) 관리
-- `src/components/DateControl.tsx`: 시뮬레이션 기준 날짜 조절 카드
-- `src/components/SimulationControls.tsx`: 연산 횟수(Iterations), 확률 계산 모델 선택 카드
-- `src/components/ProbabilityCards.tsx`: 10개 구단별 포스트시즌 진출 확률 대형 요약 배너
-- `src/components/ProbabilityTable.tsx`: 정밀 통계 지표(최고/최저 순위, 5위 확보 승수 등) 정보 그리드
-- `src/components/RankDistribution.tsx`: 몬테카를로 누적 결과에 따른 순위별 확률 분포 차트
+## 1. 개요 및 시스템 목적
+본 앱은 실시간 프로야구 순위 및 일정 데이터를 연동하여 잔여 시즌 동안 각 구단이 최종 5위 이내(포스트시즌 와일드카드 결정전 포함)에 진입할 확률을 정밀하게 통계적으로 연산하는 예측 시스템입니다. 
+Vercel Serverless Function 환경에서 불규칙한 데이터 소스의 차단이나 응답 지연(Timeouts) 문제에 대응해, 다중 데이터 소스 자동 우회(Multi-Source Adaptive Adapter) 패턴을 핵심으로 설계되었습니다.
 
 ---
 
-## 3. 안정성 향상을 위한 핵심 설계 (Resilience Design)
+## 2. 파일 및 폴더 구조 (Directory Tree)
 
-### 3.1 3-단계 이중 안전 장치 (Failover Pattern)
-1. **정상 수집 (Success)**: KBO 공식 홈페이지 및 공식 AJAX 웹 서비스를 통해 실시간 순위 테이블 및 월간 경기 기록 데이터를 로드합니다.
-2. **백업 파서 (Text-Regex Parser)**: HTML 레이아웃이 변경되었을 때, 내부 정규식 패턴 분석기를 돌려 구단별 성적 정보를 텍스트 레벨에서 파싱해냅니다.
-3. **내장 샘플 전환 (Sample Database Recovery)**: KBO 네트워크 전체가 다운되거나 오프라인일 때, 내장된 720경기 가상 시즌 일정을 실시간으로 주입하고 `fallback-sample` 플래그를 올려 프론트가 다운되지 않도록 유지합니다.
+기능별 응집도를 높이고 관리 효율을 극대화하기 위해 코드가 고도로 모듈화되어 분리되어 있습니다.
 
-### 3.2 KST (Korea Standard Time) 시간 동기화
-컨테이너 인프라가 미국이나 유럽 시간에 있어도 자가진단 및 오늘 날짜 기준 정합성을 맞추기 위해 `toLocaleString('en-US', { timeZone: 'Asia/Seoul' })`을 사용하여 서울 시간 기준으로 날짜를 엄격히 한정합니다.
-
-### 3.3 Vercel Serverless 제한 대응
-- `vercel.json`에 `maxDuration: 10` 설정을 추가하여 기본 서버리스 작동 시간 제한을 늘렸습니다.
-- 과거 시점 순위 재구성 시, 월별 수집을 동시 병렬 요청(`Promise.allSettled`) 처리하여 응답 속도를 극대화했습니다.
+```
+/
+├── api/                             # Vercel Serverless HTTP Endpoints
+│   ├── health.ts                    # 서버 헬스체크 및 자가진단 엔드포인트
+│   ├── simulate.ts                  # 몬테카를로 시즌 시뮬레이션 계산
+│   └── kbo/
+│       ├── standings.ts             # 당일/과거 KBO 구단별 순위 데이터 조회
+│       └── schedule.ts              # 잔여 일정 및 우천 취소 순연 경기 조회
+│
+├── src/
+│   ├── App.tsx                      # 메인 대시보드 UI 및 프론트엔드 연동 상태 관리
+│   ├── main.tsx                     # React 엔트리 포인트
+│   ├── index.css                    # Tailwind CSS 및 스타일링
+│   ├── types.ts                     # 전역 공통 TypeScript 타입/인터페이스 정의
+│   ├── config.ts                    # 글로벌 상수 및 팀 메타데이터 설정
+│   │
+│   ├── components/                  # UI 컴포넌트 분리
+│   │   ├── DateControl.tsx          # 날짜 선택 및 수집 트리거 컨트롤러
+│   │   ├── SimulationControls.tsx   # 시뮬레이션 파라미터 (횟수, 시드, 모델) 제어
+│   │   ├── ProbabilityCards.tsx     # 구단별 진출 확률 상단 요약 카드
+│   │   ├── ProbabilityTable.tsx     # 구단별 상세 기록 분석 데이터 테이블
+│   │   ├── RankDistribution.tsx     # 최종 예상 순위 분포 히트맵 시각화
+│   │   └── DataQualityNotice.tsx    # 미확정 경기 및 품질 가이드 경고
+│   │
+│   └── lib/
+│       ├── kbo/
+│       │   ├── buildSnapshotByDate.ts # 과거 시점 순위표 역산/재구성 모듈
+│       │   ├── parseStandings.ts      # KBO standings 기본 인터페이스 및 긴급 데이터 생성
+│       │   ├── parseSchedule.ts       # KBO schedule 기본 분석 모델
+│       │   │
+│       │   └── sources/               # [NEW] 다중 데이터 소스 어댑터 레이어
+│       │       ├── index.ts           # Source Manager (우선순위 스케줄러)
+│       │       ├── fetchWithTimeout.ts# 타임아웃(3초) 방지 브라우저-프록시 fetch 유틸
+│       │       ├── officialKboEnglishSource.ts # [P1] KBO 영문 공식 웹사이트 스크래퍼
+│       │       ├── myKboStatsSource.ts# [P2] MyKBOStats 비공식 보조 소스 스크래퍼
+│       │       ├── aiScoreSource.ts   # [P3] AiScore 글로벌 일정/결과 비공식 보조 스크래퍼
+│       │       ├── officialKboSource.ts # [P4] KBO 국문 AJAX 기반 스크래퍼
+│       │       └── fallbackSource.ts  # [P5] 2026 시즌 내장 예비 오프라인 백업 데이터
+│       │
+│       └── simulation/
+│           ├── simulateSeason.ts      # 몬테카를로 엔진 핵심 구동 로직
+│           └── pseudoRandom.ts        # 난수 결정성 유지를 위한 LCG pseudo-random 생성기
+```
 
 ---
 
-## 4. 로깅 정책 (Logging Policy)
+## 3. 다중 데이터 소스 관리 및 예외 극복 (Multi-Source Strategy)
 
-안정적인 유지 보수를 위해 모든 비즈니스 함수 호출 시 아래 형태의 정형 로그가 서버 콘솔에 남습니다:
+### 3.1 어댑터 인터페이스 (KboDataSource)
+모든 데이터 스크래퍼 및 백업 소스는 동일한 인터페이스 규격을 준수하여, 소스 매니저가 유연하게 인터페이스를 순회할 수 있도록 설계되었습니다.
+
+```typescript
+export interface KboDataSource {
+  id: string;        // 고유 식별자 (예: 'official-kbo-en', 'mykbostats')
+  label: string;     // UI에 표시될 이름 (예: 'MyKBOStats 비공식 보조 데이터')
+  priority: number;  // 실행 우선순위 (낮을수록 먼저 시도)
+  getStandings(date: string): Promise<KBOStandingsResult>;
+  getSchedule(fromDate: string): Promise<KBOScheduleResult>;
+}
 ```
-[parseSchedule] [CALL] parseMatchup - Text: "한화 5vs2 두산"
-[buildSnapshotByDate] [CALL] getKstDateString - Resolved KST: "2026-06-28"
-[api/simulate] [CALL] handler - date: "2026-06-28", iterations: "50000", ...
-```
-이를 통해 장애 지점을 추적할 때 프론트 자가진단 UI의 `phase` 데이터와 서버 터미널 로그를 즉각적으로 매핑할 수 있습니다.
+
+### 3.2 수집 우선순위 모델 (Priority Queue)
+공식 사이트의 속도 및 서버리스 차단 여부에 따라 다음과 같이 동적 우선순위가 정의됩니다.
+
+1. **우선순위 1 (KBO 공식 영문 사이트):** Vercel IP 대역 차단이 덜하고 경량 테이블 구조를 가짐. 가장 최우선 조회.
+2. **우선순위 2 (MyKBOStats):** 안정적인 호스팅과 신속한 파싱 구조를 가진 해외 특화 비공식 보조 데이터 소스.
+3. **우선순위 3 (AiScore):** 글로벌 경기 지표를 제공하는 보조 소스로 영문 매핑을 통해 보조 활용.
+4. **우선순위 4 (KBO 공식 국문 사이트):** 국내 전용 차단 장벽 및 다중 서브쿼리 구조로 인해 느린 편이므로 보조 순위로 하향 조정.
+5. **우선순위 5 (로컬 번들 데이터):** 네트워크 자체가 완전 단절되거나 외부 채널 전체 차단 시 즉시 활성화되는 오프라인 백업.
+
+### 3.3 타임아웃 및 샌드박싱 (Sandboxed Fetch)
+- 각 데이터 소스를 개별 조회할 때 `Promise.race`를 사용하여 **최대 3초** 이내에 응답이 오지 않으면 자동으로 타임아웃 처리합니다.
+- 특정 단계의 소스 연동 실패 시 에러 사유 및 소스명을 `failedSources` 목록에 기록하고, 다음 우선순위 소스로 자동 연쇄 이양(Cascading)됩니다.
+- API 레벨(`simulate`, `standings`, `schedule`)은 외부 네트워크 장애 시에 500 오류를 발생시키지 않고, 백업 데이터를 이용하여 무조건 **HTTP 200**으로 결과를 반환하도록 설계되었습니다.
+
+---
+
+## 4. 몬테카를로 시뮬레이션 연산 설계
+
+- **과거 순위 역산:** 사용자가 과거 특정 날짜를 선택하면, 시스템은 선택된 날짜까지의 경기 데이터만 추려 순위를 재구성(`buildSnapshotByDate`)합니다.
+- **잔여 경기 가상 매치:** 지정 날짜 이후의 예정 경기(우천 취소 등으로 미확정된 경기 포함)에 대해 몬테카를로 루프를 가동합니다.
+- **결정적 난수 생성:** 시뮬레이션 계산 시 일관된 결과를 유도하기 위해 자바스크립트의 비결정적 `Math.random` 대신 Seed 값이 주입되는 Linear Congruential Generator(LCG) 알고리즘을 사용합니다.
+- **확률 예측 모델:**
+  - `equal` (균등 확률 모델): 각 구단의 전력과 무관하게 홈/원정 각각 50%의 확률 적용.
+  - `winRate` (누적 승률 모델): 시뮬레이션 시점의 누적 승률에 따라 가중 확률 계산.
+  - `hybrid` (하이브리드 다면 모델): 누적 승률과 홈/원정 가중치 및 최근 10경기 추세를 종합 가중치로 합산 연산.
+- **Vercel 실행 제한 방어:** 서버리스 실행 한계 극복을 위해 50,000회 및 100,000회 구동 요청은 내부적으로 최대 **10,000회**로 자동 제한 조절하고 사용자에게 세부 보고 경고(Warning Notice)를 표시합니다.
+
+---
+
+## 5. UI 및 자가진단 대시보드 흐름
+
+### 5.1 데이터 연동 상태 카드
+사용하는 소스에 맞추어 색상 연동 체계를 세분화하였습니다.
+- KBO 공식 계열 소스: **초록색** ("정상 수집 완료")
+- 비공식 보조 소스(MyKBOStats, AiScore): **노란색** ("보조 데이터 연동 중")
+- 내장 번들 데이터: **주황색** ("예비 데이터 연동 중")
+- API 연산 불능 상태: **빨간색** ("연동 에러 발생")
+
+### 5.2 자가진단 모니터 (Self-Diagnostics Monitor)
+각 단계(/api/health ➜ /api/kbo/standings ➜ /api/kbo/schedule ➜ /api/simulate)에 대해 실시간 OK/WARNING/FAIL 상태를 동적으로 추적하고, 검사 과정에서 탈락한 실패 소스 목록(`failedSources`)과 그 이유를 카드에 친절하게 덤프하여 투명하게 운영 상태를 보여줍니다.

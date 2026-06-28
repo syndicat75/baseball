@@ -6,6 +6,8 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { buildSnapshotByDate, getKstDateString } from '../../src/lib/kbo/buildSnapshotByDate';
+import { getBestAvailableStandings } from '../../src/lib/kbo/sources';
+import { getFallbackStandings } from '../../src/lib/kbo/parseStandings';
 
 /**
  * Handles GET /api/kbo/standings request to compile standings as of a date.
@@ -20,40 +22,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Default to Korea Standard Time today if no date is provided
   const targetDate = (date as string) || getKstDateString();
   const forceRefresh = refresh === 'true';
-
-  let currentPhase = 'api.start';
+  const todayStr = getKstDateString();
 
   try {
     console.log(`[api/kbo/standings] Processing standings snapshot for date: "${targetDate}" (forceRefresh: ${forceRefresh})`);
     
-    currentPhase = 'buildSnapshot.reconstruct';
-    const standings = await buildSnapshotByDate(targetDate, forceRefresh);
+    let standings;
+    if (targetDate >= todayStr) {
+      console.log(`[api/kbo/standings] Date is today or future. Querying source manager for best available standings.`);
+      standings = await getBestAvailableStandings(targetDate);
+    } else {
+      console.log(`[api/kbo/standings] Date is in the past. Reconstructing standings from schedule.`);
+      standings = await buildSnapshotByDate(targetDate, forceRefresh);
+    }
 
     console.log(`[api/kbo/standings] Successfully constructed standings. Source: "${standings.source}", errorType: "${standings.errorType || 'none'}"`);
     
     // Always return 200 even if fallback was engaged, as long as fallback data is successfully compiled.
     return res.status(200).json(standings);
   } catch (error: any) {
-    console.error(`[api/kbo/standings] Exception caught in standings endpoint:`, error);
+    console.error(`[api/kbo/standings] Exception caught in standings endpoint, falling back to emergency standings:`, error);
     
-    // Map phase based on error messages or target locations if possible
-    let phase = currentPhase;
-    const msg = error.message || '';
-    if (msg.includes('fetchKboPage') || msg.includes('fetch')) {
-      phase = 'parseStandings.fetch';
-    } else if (msg.includes('cheerio') || msg.includes('table')) {
-      phase = 'parseStandings.tableParser';
-    } else if (msg.includes('regex') || msg.includes('text')) {
-      phase = 'parseStandings.textParser';
+    try {
+      const emergency = getFallbackStandings(targetDate, 'HTML parser 실패', `일시적 서버 오류 및 데이터 수집 실패: ${error.message}`);
+      return res.status(200).json({
+        ...emergency,
+        source: 'bundled-fallback',
+        sourceLabel: '번들 로컬 예비 데이터',
+        fetchedAt: new Date().toISOString(),
+      });
+    } catch (fallbackErr: any) {
+      return res.status(500).json({
+        error: 'Critical system failure',
+        details: error.message,
+        errorMessage: '코드 실행 자체가 불가능한 치명적인 시스템 오류가 발생했습니다.',
+        errorType: 'HTML parser 실패',
+      });
     }
-
-    return res.status(500).json({
-      error: 'Failed to retrieve standings snapshot',
-      details: error.message,
-      errorMessage: error.message,
-      errorType: 'HTML parser 실패',
-      stackPreview: error.stack ? error.stack.split('\n').slice(0, 3).join('\n') : '',
-      phase,
-    });
   }
 }
+

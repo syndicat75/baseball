@@ -6,9 +6,11 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { buildSnapshotByDate, getKstDateString } from '../src/lib/kbo/buildSnapshotByDate';
-import { getSchedule, generateFallbackSchedule } from '../src/lib/kbo/parseSchedule';
+import { getBestAvailableStandings, getBestAvailableSchedule } from '../src/lib/kbo/sources';
 import { simulateSeason } from '../src/lib/simulation/simulateSeason';
 import { ProbabilityModelType } from '../src/types';
+import { getFallbackStandings } from '../src/lib/kbo/parseStandings';
+import { fallbackSource } from '../src/lib/kbo/sources/fallbackSource';
 
 /**
  * Handles GET /api/simulate to run postseason entry probability simulations.
@@ -22,48 +24,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Default to Korea Standard Time today if no date is provided
   const targetDate = (date as string) || getKstDateString();
-  let iters = parseInt(iterations as string) || 10000;
-  // Cap at 10000 for serverless safety to ensure execution times strictly below 2 seconds
+  const todayStr = getKstDateString();
+
+  let requestedIters = parseInt(iterations as string) || 10000;
+  let iters = requestedIters;
+  const warnings: string[] = [];
+
+  // Cap at 10000 for serverless safety to ensure execution times strictly below 2 seconds (well within 9 seconds)
   if (iters > 10000) {
     iters = 10000;
+    warnings.push(`Vercel 서버리스 안정성을 위해 ${requestedIters.toLocaleString()}회 시뮬레이션 요청이 내부적으로 10,000회 연산으로 자동 조절되었습니다.`);
   }
+
   const modelType = (model as ProbabilityModelType) || 'winRate';
   const randSeed = seed ? parseInt(seed as string) : 42;
-  const forceRefresh = refresh === 'true';
-
-  let currentPhase = 'api.start';
 
   try {
     // 1. Gather the historical/current standings snapshot for the date
     console.log(`[api/simulate] Step 1: Compiling standings snapshot as of "${targetDate}"...`);
-    currentPhase = 'buildSnapshot.reconstruct';
-    const standings = await buildSnapshotByDate(targetDate, forceRefresh);
+    let standings;
+    if (targetDate >= todayStr) {
+      standings = await getBestAvailableStandings(targetDate);
+    } else {
+      standings = await buildSnapshotByDate(targetDate);
+    }
 
     // 2. Gather remaining schedule starting from the day after the snapshot date
     console.log(`[api/simulate] Step 2: Compiling schedule and postponed games after "${targetDate}"...`);
-    let schedule;
-    try {
-      currentPhase = 'schedule.fullSeason';
-      schedule = await getSchedule(targetDate, forceRefresh);
-    } catch (schedError: any) {
-      console.warn(`[api/simulate] Schedule compilation failed. Engaging local backup schedule...`, schedError);
-      
-      const fallbackGames = generateFallbackSchedule();
-      const upcomingGames = fallbackGames.filter(g => g.date > targetDate && g.status === 'scheduled');
-      
-      schedule = {
-        from: targetDate,
-        games: upcomingGames,
-        unresolvedGames: [],
-        source: 'bundled-fallback',
-        errorType: '샘플 데이터 사용' as const,
-        errorMessage: `KBO 공식 일정을 수집할 수 없어 내장 번들 일정을 사용하여 보정합니다. (상세: ${schedError.message})`,
-      };
-    }
+    const schedule = await getBestAvailableSchedule(targetDate);
 
     // 3. Run Monte Carlo simulation on the future schedule
     console.log(`[api/simulate] Step 3: Running Monte Carlo loops (Count: ${iters}, Model: ${modelType})...`);
-    currentPhase = 'simulation.run';
     const simResults = await simulateSeason(standings, schedule.games, schedule.unresolvedGames, {
       date: targetDate,
       iterations: iters,
@@ -71,39 +62,67 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       seed: randSeed,
     });
 
-    const isFallback = standings.source === 'bundled-fallback' || schedule.source === 'bundled-fallback' || standings.source === 'fallback-sample' || schedule.source === 'fallback-sample';
+    const isFallback = standings.source === 'bundled-fallback' || schedule.source === 'bundled-fallback';
+    const finalSource = isFallback ? 'bundled-fallback' : (standings.source || 'official-kbo');
+
     const responseBody = {
       ...simResults,
       unresolvedGames: schedule.unresolvedGames,
-      source: isFallback ? 'bundled-fallback' : 'official-kbo',
+      source: finalSource,
+      sourceLabel: standings.sourceLabel || standings.source,
+      scheduleSource: schedule.source,
+      scheduleSourceLabel: schedule.sourceLabel || schedule.source,
       errorType: standings.errorType || schedule.errorType,
       errorMessage: standings.errorMessage || schedule.errorMessage,
+      warnings: [
+        ...warnings,
+        ...(standings.warnings || []),
+        ...(schedule.warnings || [])
+      ],
+      failedSources: [
+        ...(standings.failedSources || []),
+        ...(schedule.failedSources || [])
+      ]
     };
 
     console.log(`[api/simulate] Successfully completed simulation. Sending JSON response. Source: "${responseBody.source}"`);
     return res.status(200).json(responseBody);
   } catch (error: any) {
-    console.error(`[api/simulate] Simulation execution failed:`, error);
+    console.error(`[api/simulate] Simulation execution failed, trying local emergency fallback:`, error);
     
-    let phase = currentPhase;
-    const msg = error.message || '';
-    if (msg.includes('fetchKboPage') || msg.includes('fetch')) {
-      phase = 'parseStandings.fetch';
-    } else if (msg.includes('cheerio') || msg.includes('table')) {
-      phase = 'parseStandings.tableParser';
-    } else if (msg.includes('regex') || msg.includes('text')) {
-      phase = 'parseStandings.textParser';
-    } else if (msg.includes('month')) {
-      phase = 'schedule.fetchMonth';
-    }
+    try {
+      // Emergency absolute fallback
+      const targetDate = getKstDateString();
+      const emStandings = getFallbackStandings(targetDate, 'HTML parser 실패', `시뮬레이션 중 오류 복구: ${error.message}`);
+      const emSchedule = await fallbackSource.getSchedule(targetDate);
 
-    return res.status(500).json({
-      error: 'Simulation execution failed',
-      details: error.message,
-      errorMessage: error.message,
-      errorType: 'HTML parser 실패',
-      stackPreview: error.stack ? error.stack.split('\n').slice(0, 3).join('\n') : '',
-      phase,
-    });
+      const simResults = await simulateSeason(emStandings, emSchedule.games, emSchedule.unresolvedGames, {
+        date: targetDate,
+        iterations: 10000,
+        model: modelType,
+        seed: randSeed,
+      });
+
+      return res.status(200).json({
+        ...simResults,
+        unresolvedGames: emSchedule.unresolvedGames,
+        source: 'bundled-fallback',
+        sourceLabel: '번들 로컬 예비 데이터',
+        scheduleSource: 'bundled-fallback',
+        scheduleSourceLabel: '번들 로컬 예비 데이터',
+        errorType: '샘플 데이터 사용',
+        errorMessage: `데이터 수집 실패로 인해 예비 데이터로 연산했습니다. (${error.message})`,
+        warnings: [`시뮬레이션 도중 복구 불가능한 시스템 예외가 발생하여, 내장 번들 데이터 기준으로 결과를 재생성하였습니다.`],
+        failedSources: [{ source: 'all', reason: error.message }]
+      });
+    } catch (fallbackErr: any) {
+      return res.status(500).json({
+        error: 'Simulation critical failure',
+        details: error.message,
+        errorMessage: '코드 실행 자체가 불가능한 치명적인 시스템 오류가 발생했습니다.',
+        errorType: 'HTML parser 실패',
+      });
+    }
   }
 }
+
