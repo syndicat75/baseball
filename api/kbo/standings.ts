@@ -35,6 +35,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       safeDirname = process.cwd();
     }
 
+    /**
+     * Vercel Serverless 실행 환경 및 로컬 환경에서 지정된 JSON 데이터 파일의 물리적 경로를 탐색하여 반환합니다.
+     * @param fileName 탐색할 JSON 파일명 (예: kbo-latest.json)
+     * @returns 파일이 존재하는 경로 문자열 또는 null
+     */
     const findDataPath = (fileName: string): string | null => {
       const candidates = [
         path.join(process.cwd(), 'public', 'data', fileName),
