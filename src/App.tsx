@@ -14,6 +14,8 @@ import { RankDistribution } from './components/RankDistribution';
 import { DataQualityNotice } from './components/DataQualityNotice';
 import { TeamSimulationStats } from './types';
 import { Award, Zap, RefreshCw, AlertTriangle, HelpCircle, CheckCircle2 } from 'lucide-react';
+import { loadKboStaticData } from './lib/staticData/loadKboStaticData';
+import { simulateFromStaticData } from './lib/simulation/simulateFromStaticData';
 
 interface FullSimulationData {
   date: string;
@@ -89,7 +91,9 @@ export default function App() {
   });
 
   /**
-   * Fetches simulation results and standings snapshots from the backend.
+   * @function fetchSimulationResults
+   * @description 정적 JSON 데이터 파일(/data/kbo-latest.json)을 읽어온 뒤 브라우저 상에서 몬테카를로 시뮬레이션을 실행하고 화면에 렌더링합니다.
+   * @param {boolean} [forceRefresh=false] 강제 수집 파일 재요청 플래그
    */
   const fetchSimulationResults = async (forceRefresh = false) => {
     console.log(`[App] [CALL] fetchSimulationResults - Date: ${selectedDate}, Iterations: ${iterations}, Model: ${selectedModel}, Seed: ${seed}, Refresh: ${forceRefresh}`);
@@ -97,39 +101,57 @@ export default function App() {
     setError(null);
 
     try {
-      const url = `/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`;
-      const response = await fetch(url);
+      // 1. KBO 정적 데이터 로드
+      const staticResult = await loadKboStaticData(selectedDate);
+      const { data, source, sourceLabel, isFallback, warnings, fetchedAt } = staticResult;
 
-      if (!response.ok) {
-        let errData;
-        try {
-          errData = await response.json();
-        } catch {
-          throw new Error(`서버 오류 (상태 코드: ${response.status})`);
-        }
-        throw new Error(errData.errorMessage || errData.details || `서버 오류 (상태 코드: ${response.status})`);
-      }
+      // 2. 브라우저 사이드 몬테카를로 시뮬레이션 엔진 가동
+      console.log(`[App] Running browser-side Monte Carlo simulation: ${iterations} iterations, Model: ${selectedModel}`);
+      const simResult = await simulateFromStaticData({
+        standings: data.standings,
+        remainingGames: data.remainingGames,
+        completedGames: data.completedGames || [],
+        iterations,
+        model: selectedModel,
+        seed,
+        asOfDate: data.asOfDate || selectedDate,
+      });
 
-      const data = await response.json() as FullSimulationData;
-      console.log(`[App] Successfully received simulation data from server. Source: "${data.source}"`);
-      
-      setSimData(data);
-      setIsFallbackSample(data.originalSource === 'bundled-fallback');
-      
+      // 3. 응답 규격 포맷팅
+      const formattedData: FullSimulationData = {
+        date: data.asOfDate || selectedDate,
+        iterations,
+        model: selectedModel,
+        results: simResult.results,
+        unresolvedGames: data.remainingGames.filter((g: any) => g.status === 'scheduled'),
+        source,
+        sourceLabel,
+        fetchedAt,
+        warnings: [
+          ...(warnings || []),
+          ...(simResult.unresolvedGames?.length === 0 ? ['모든 정규시즌 경기가 완료되었습니다.'] : [])
+        ],
+        failedSources: data.failedSources || [],
+      };
+
+      setSimData(formattedData);
+      setIsFallbackSample(isFallback);
+
       setStandingsSourceInfo({
-        source: data.originalSource || data.source,
-        sourceLabel: data.originalSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source,
+        sourceLabel,
         failedSources: data.failedSources,
       });
 
       setScheduleSourceInfo({
-        source: data.originalSource || data.source,
-        sourceLabel: data.originalSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source,
+        sourceLabel,
         failedSources: data.failedSources,
       });
 
       const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastUpdated(currentTime);
+
       setDiagnostic(prev => ({
         ...prev,
         health: 'ok',
@@ -137,25 +159,26 @@ export default function App() {
         schedule: 'ok',
         simulate: 'ok',
         status: 'success',
-        lastSuccessTime: currentTime
+        lastSuccessTime: currentTime,
       }));
     } catch (err: any) {
-      console.error(`[App] Error in fetchSimulationResults:`, err);
-      setError(err.message || '데이터 수집 또는 연산 실행 중 문제가 발생했습니다. 자가진단을 통해 정밀 원인을 확인해 주세요.');
+      console.error('[App] Error in fetchSimulationResults:', err);
+      setError(err.message || '데이터 로드 또는 시뮬레이션 계산 중 에러가 발생했습니다.');
     } finally {
       setIsLoading(false);
     }
   };
 
   /**
-   * 로컬 JSON 데이터 파일을 수동으로 다시 불러옵니다.
+   * @function handleRefreshData
+   * @description 로컬 JSON 데이터 파일을 수동으로 다시 불러옵니다.
    */
   const handleRefreshData = async () => {
     console.log('[App] [CALL] handleRefreshData - 로컬 JSON 데이터 새로고침 가동');
     setIsLoading(true);
     try {
-      await fetchSimulationResults(false);
-      setRefreshMessage('데이터 파일을 성공적으로 다시 불러왔습니다.');
+      await fetchSimulationResults(true);
+      setRefreshMessage('예약 수집 데이터 파일을 성공적으로 다시 읽어왔습니다.');
       setTimeout(() => {
         setRefreshMessage(null);
       }, 4000);
@@ -166,11 +189,10 @@ export default function App() {
     }
   };
 
-
   /**
-   * Runs sequential diagnostics and retries data fetching.
-   * Tests static JSON load, 10 team validation, remaining games and monte-carlo simulator execution in order.
-   * Reports exactly where any failure occurs and maps statuses beautifully.
+   * @function runDiagnosticsAndRetry
+   * @description 순차적으로 자가 진단을 수행하고 데이터를 동기화합니다.
+   * 정적 JSON 로드, 10개 팀 정합성, 남은 경기 유무, 브라우저 엔진 계산 등을 단계별로 검증합니다.
    */
   const runDiagnosticsAndRetry = async () => {
     console.log('[App] [CALL] runDiagnosticsAndRetry');
@@ -180,7 +202,7 @@ export default function App() {
       standings: 'idle',
       schedule: 'idle',
       simulate: 'idle',
-      currentStep: '1단계: 정적 JSON 데이터 파일 가동성 검증 (/api/kbo/standings)...',
+      currentStep: '1단계: 정적 JSON 데이터 파일 가동성 검증...',
       errorDetails: null,
       lastSuccessTime: diagnostic.lastSuccessTime,
     });
@@ -189,21 +211,10 @@ export default function App() {
 
     try {
       // Step 1: Static JSON Load Check
-      const standingsRes = await fetch(`/api/kbo/standings?date=${selectedDate}`);
-      if (!standingsRes.ok) {
-        let errData;
-        try {
-          errData = await standingsRes.json();
-        } catch {}
-        throw new Error(errData?.errorMessage || `KBO 순위 데이터 API 호출 실패 (상태 코드: ${standingsRes.status}). 정적 JSON 캐시 부재.`);
+      const staticResult = await loadKboStaticData(selectedDate);
+      if (staticResult.isFallback && !selectedDate) {
+        throw new Error('정적 JSON 데이터 로드에 실패하여 내장 fallback 데이터를 수집했습니다. 원격 JSON이 부재합니다.');
       }
-      const standingsData = await standingsRes.json();
-      
-      setStandingsSourceInfo({
-        source: standingsData.originalSource || standingsData.source,
-        sourceLabel: standingsData.originalSourceLabel || standingsData.sourceLabel,
-        failedSources: standingsData.failedSources,
-      });
 
       setDiagnostic(prev => ({
         ...prev,
@@ -213,35 +224,20 @@ export default function App() {
       }));
 
       // Step 2: Validate 10 Teams
-      if (!standingsData.teams || standingsData.teams.length !== 10) {
-        throw new Error(`순위 데이터 무결성 검증 실패: 로드된 팀이 ${standingsData.teams?.length || 0}개입니다 (10개 팀이 수집되어 있어야 합니다).`);
+      const { data } = staticResult;
+      if (!data.standings || data.standings.length !== 10) {
+        throw new Error(`순위 데이터 무결성 검증 실패: 로드된 팀이 ${data.standings?.length || 0}개입니다 (10개 팀이 수집되어 있어야 합니다).`);
       }
 
       setDiagnostic(prev => ({
         ...prev,
         standings: 'ok',
         schedule: 'checking',
-        currentStep: '3단계: 남은 경기 데이터 존재 여부 확인 (/api/kbo/schedule)...',
+        currentStep: '3단계: 남은 경기 데이터 존재 여부 확인...',
       }));
 
       // Step 3: Validate Remaining Games
-      const scheduleRes = await fetch(`/api/kbo/schedule?from=${selectedDate}`);
-      if (!scheduleRes.ok) {
-        let errData;
-        try {
-          errData = await scheduleRes.json();
-        } catch {}
-        throw new Error(errData?.errorMessage || `KBO 일정 및 순연 데이터 API 호출 실패 (상태 코드: ${scheduleRes.status}).`);
-      }
-      const scheduleData = await scheduleRes.json();
-
-      setScheduleSourceInfo({
-        source: scheduleData.originalSource || scheduleData.source,
-        sourceLabel: scheduleData.originalSourceLabel || scheduleData.sourceLabel,
-        failedSources: scheduleData.failedSources,
-      });
-
-      if (!scheduleData.remainingGames || scheduleData.remainingGames.length === 0) {
+      if (!data.remainingGames || data.remainingGames.length === 0) {
         throw new Error('일정 데이터 무결성 검증 실패: 잔여 일정이 존재하지 않거나 수집되지 않았습니다.');
       }
 
@@ -249,33 +245,35 @@ export default function App() {
         ...prev,
         schedule: 'ok',
         simulate: 'checking',
-        currentStep: '4단계: 가을야구 시뮬레이션 연산 가동성 검증 (/api/simulate)...',
+        currentStep: '4단계: 브라우저 몬테카를로 시뮬레이션 연산 가동성 검증...',
       }));
 
       // Step 4: Validate Simulation Calculation
-      const simulateRes = await fetch(`/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`);
-      if (!simulateRes.ok) {
-        let errData;
-        try {
-          errData = await simulateRes.json();
-        } catch {}
-        throw new Error(errData?.errorMessage || `시뮬레이션 연산 API 호출 실패 (상태 코드: ${simulateRes.status}).`);
-      }
-      const simulateData = await simulateRes.json();
-      
-      setSimData(simulateData);
-      setIsFallbackSample(simulateData.originalSource === 'bundled-fallback');
-      
-      const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      setLastUpdated(currentTime);
+      const simResult = await simulateFromStaticData({
+        standings: data.standings,
+        remainingGames: data.remainingGames,
+        completedGames: data.completedGames || [],
+        iterations: 1000, // 진단용 고속 연산 (1000회)
+        model: selectedModel,
+        seed,
+        asOfDate: data.asOfDate || selectedDate,
+      });
 
+      if (!simResult || !simResult.results || simResult.results.length === 0) {
+        throw new Error('브라우저 시뮬레이션 수행 결과 반환값이 빈 비정상 상태입니다.');
+      }
+
+      // 정식 연산 한 번 수행하여 화면도 업데이트
+      await fetchSimulationResults(false);
+
+      const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setDiagnostic({
         status: 'success',
         health: 'ok',
         standings: 'ok',
         schedule: 'ok',
         simulate: 'ok',
-        currentStep: '자가진단 완료: 정적 JSON 데이터 파일 로딩, 10개 팀 순위 정합성, 잔여 경기 검증, 몬테카를로 엔진 구동이 모두 정상입니다!',
+        currentStep: '자가진단 완료: 정적 JSON 데이터 파일 로딩, 10개 구단 순위 정합성, 잔여 경기 검증, 몬테카를로 엔진 구동이 모두 정상입니다!',
         errorDetails: null,
         lastSuccessTime: currentTime,
       });

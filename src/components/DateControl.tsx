@@ -71,11 +71,11 @@ export const DateControl: React.FC<DateControlProps> = ({
             }}
             disabled={isLoading}
             className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 disabled:opacity-50 text-slate-700 font-medium text-sm rounded-lg border border-slate-200 cursor-pointer transition-all"
-            title="공식 KBO 사이트에서 데이터를 새로 스크래핑합니다."
+            title="서버에 예약 수집된 JSON 데이터 파일을 다시 읽어옵니다."
             id="refresh-data-btn"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-            KBO 공식 데이터 갱신
+            예약 수집 데이터 다시 읽기
           </button>
         </div>
       </div>
