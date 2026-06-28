@@ -1,0 +1,8 @@
+{
+  "name": "KBO 가을야구 진출 확률 계산기",
+  "description": "KBO 프로야구 잔여 정규시즌 일정을 몬테카를로 기법으로 수만 회 플레이 시뮬레이션하여, 각 구단의 가을야구(최종 5위 이내) 진출 확률을 예측해 보여주는 대시보드 웹앱입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
