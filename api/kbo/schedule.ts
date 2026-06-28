@@ -1,55 +1,81 @@
 /**
  * @file schedule.ts
- * @description Vercel serverless function to retrieve KBO remaining matches and postponed games.
- * Supports starting date and forced refresh parameters.
+ * @description KBO 경기 일정 정보 엔드포인트입니다.
+ * 외부 사이트를 직접 크롤링하지 않고 예약 수집된 로컬 JSON 캐시를 그대로 반환합니다.
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getBestAvailableSchedule } from '../../src/lib/kbo/sources';
+import * as fs from 'fs';
+import * as path from 'path';
 import { fallbackSource } from '../../src/lib/kbo/sources/fallbackSource';
-import { getKstDateString } from '../../src/lib/kbo/buildSnapshotByDate';
 
 /**
- * Handles GET /api/kbo/schedule request to get upcoming and unresolved postponed games.
- * 
- * @param req - Incoming Vercel HTTP request
- * @param res - Outgoing Vercel HTTP response
+ * 한국 시간(KST) 기준 YYYY-MM-DD 날짜 반환
  */
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { from, refresh } = req.query;
-  console.log(`[api/kbo/schedule] [CALL] handler - from: "${from}", refresh: "${refresh}"`);
-
-  // Default to Korea Standard Time today if no from date is provided
-  const targetDate = (from as string) || getKstDateString();
-
-  try {
-    console.log(`[api/kbo/schedule] Fetching schedule from date: "${targetDate}"`);
-    
-    const schedule = await getBestAvailableSchedule(targetDate);
-
-    console.log(`[api/kbo/schedule] Successfully compiled schedule. Games found: ${schedule.games.length}, Unresolved: ${schedule.unresolvedGames.length}`);
-    return res.status(200).json(schedule);
-  } catch (error: any) {
-    console.error(`[api/kbo/schedule] Error compiling schedule, falling back to local fallback:`, error);
-    
-    try {
-      const fallbackRes = await fallbackSource.getSchedule(targetDate);
-      return res.status(200).json({
-        ...fallbackRes,
-        source: 'bundled-fallback',
-        sourceLabel: '번들 로컬 예비 데이터',
-        fetchedAt: new Date().toISOString(),
-        warnings: [`일정 수집 실패로 인해 예비 데이터를 사용합니다. (${error.message})`],
-        failedSources: [{ source: 'all', reason: error.message }],
-      });
-    } catch (fallbackErr: any) {
-      return res.status(500).json({
-        error: 'Critical system failure',
-        details: error.message,
-        errorMessage: '코드 실행 자체가 불가능한 치명적인 시스템 오류가 발생했습니다.',
-        errorType: 'HTML parser 실패',
-      });
-    }
-  }
+function getKstDateString(): string {
+  const d = new Date();
+  const kstOffset = 9 * 60 * 60 * 1000;
+  const kstDate = new Date(d.getTime() + kstOffset);
+  return kstDate.toISOString().split('T')[0];
 }
 
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const { from } = req.query;
+  console.log(`[api/kbo/schedule] [CALL] handler - from: "${from}"`);
+
+  const todayStr = getKstDateString();
+  const targetDate = (from as string) || todayStr;
+
+  try {
+    const dataDir = path.join(process.cwd(), 'public', 'data');
+    let dataPath = path.join(dataDir, `kbo-${targetDate}.json`);
+
+    if (!fs.existsSync(dataPath)) {
+      dataPath = path.join(dataDir, 'kbo-latest.json');
+    }
+
+    let kboData: any;
+
+    if (fs.existsSync(dataPath)) {
+      const rawData = fs.readFileSync(dataPath, 'utf-8');
+      kboData = JSON.parse(rawData);
+    } else {
+      // 비상시 로컬 번들 데이터 반환
+      console.warn('[api/kbo/schedule] JSON 파일 누락. 로컬 예비 데이터 생성.');
+      const fallbackSchedule = await fallbackSource.getSchedule();
+      kboData = {
+        asOfDate: todayStr,
+        primarySource: 'bundled-fallback',
+        sourceLabel: '번들 로컬 예비 데이터',
+        remainingGames: fallbackSchedule.remainingGames,
+        completedGames: fallbackSchedule.completedGames,
+      };
+    }
+
+    const completedGames = kboData.completedGames || [];
+    const remainingGames = kboData.remainingGames || [];
+    const unresolvedGames = remainingGames.filter((g: any) => g.status === 'scheduled');
+    const allGames = [...completedGames, ...remainingGames];
+
+    const response = {
+      source: 'static-json',
+      sourceLabel: '예약 수집 JSON 데이터',
+      originalSource: kboData.primarySource,
+      originalSourceLabel: kboData.sourceLabel,
+      completedGames,
+      remainingGames,
+      unresolvedGames,
+      games: allGames,
+      asOfDate: kboData.asOfDate,
+      fetchedAt: kboData.fetchedAt,
+    };
+
+    return res.status(200).json(response);
+  } catch (err: any) {
+    console.error('[api/kbo/schedule] 일정 반환 실패:', err);
+    return res.status(500).json({
+      error: 'Schedule load failure',
+      details: err.message,
+    });
+  }
+}

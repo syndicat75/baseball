@@ -4,9 +4,31 @@
  * 모든 소스 어댑터 및 통합 관리자(Source Manager)의 API를 외부로 재수출합니다.
  */
 
-export * from './sourceManager';
+import { KBOGame } from '../../../types';
+
+export interface KBOStanding {
+  team: string;
+  displayName: string;
+  nameKo?: string;
+  games: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  winRate: number;
+  rank: number;
+}
+
+export interface KboDataSource {
+  id: string;
+  label: string;
+  priority: number;
+  getStandings(): Promise<KBOStanding[]>;
+  getSchedule(): Promise<{ completedGames: KBOGame[]; remainingGames: KBOGame[] }>;
+}
+
+export { fetchWithTimeout } from './fetchWithTimeout';
 export { myKboStatsSource } from './myKboStatsSource';
 export { officialKboEnglishSource } from './officialKboEnglishSource';
-export { theSportsDbSource } from './theSportsDbSource';
+export { aiScoreSource } from './aiScoreSource';
 export { fallbackSource } from './fallbackSource';
-export { fetchWithTimeout } from './fetchWithTimeout';
+export { getBestAvailableStandings, getBestAvailableSchedule } from './sourceManager';

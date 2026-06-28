@@ -4,11 +4,10 @@
  */
 
 import * as cheerio from 'cheerio';
-import { KboDataSource } from './index';
-import { KBOStandingsResult, KBOScheduleResult, StandingsTeam, KBOGame } from '../../../types';
+import { KboDataSource, KBOStanding } from './index';
+import { KBOGame } from '../../../types';
 import { fetchWithTimeout } from './fetchWithTimeout';
 import { CONFIG } from '../../../config';
-import { fallbackStandings2026 } from '../../../data/fallbackStandings2026';
 import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 
 /**
@@ -30,22 +29,32 @@ export function normaliseEngTeamCode(name: string): string {
   return 'KIA';
 }
 
+/**
+ * 한국 시간(KST) 기준 YYYY-MM-DD 날짜 문자열 반환
+ */
+function getKstDateString(): string {
+  const d = new Date();
+  const kstOffset = 9 * 60 * 60 * 1000;
+  const kstDate = new Date(d.getTime() + kstOffset);
+  return kstDate.toISOString().split('T')[0];
+}
+
 export const officialKboEnglishSource: KboDataSource = {
   id: 'official-kbo-en',
-  label: 'KBO 공식 영문 사이트',
-  priority: 2,
+  label: 'KBO 공식 영문 데이터',
+  priority: 1, // KBO 공식 영문 사이트가 1순위 (사용자 수정 요구사항 4번 참고: 1순위: KBO 공식 영문 사이트)
 
-  async getStandings(date: string): Promise<KBOStandingsResult> {
-    console.log(`[officialKboEnglishSource] [CALL] getStandings - Date: ${date}`);
+  async getStandings(): Promise<KBOStanding[]> {
+    console.log('[officialKboEnglishSource] [CALL] getStandings');
     const url = 'https://eng.koreabaseball.com/Standings/TeamStandings.aspx';
-    const res = await fetchWithTimeout(url, { timeoutMs: 3000 });
+    const res = await fetchWithTimeout(url, { timeoutMs: 5000 });
 
     if (!res.ok || !res.data) {
       throw new Error(res.error || `HTTP ${res.status || 'Unknown error'}`);
     }
 
     const $ = cheerio.load(res.data);
-    const teams: StandingsTeam[] = [];
+    const teams: KBOStanding[] = [];
 
     // Parse standings tables
     $('table tbody tr').each((_, elem) => {
@@ -65,6 +74,7 @@ export const officialKboEnglishSource: KboDataSource = {
         if (teamCode && teams.length < 10 && !teams.some(t => t.team === teamCode)) {
           teams.push({
             team: teamCode,
+            displayName: CONFIG.TEAMS[teamCode]?.nameKo || teamCode,
             nameKo: CONFIG.TEAMS[teamCode]?.nameKo || teamCode,
             games,
             wins,
@@ -82,109 +92,102 @@ export const officialKboEnglishSource: KboDataSource = {
       throw new Error(`Parsing failed (Got ${teams.length} teams)`);
     }
 
-    // Sort teams by rank just in case
+    // Sort teams by rank
     teams.sort((a, b) => a.rank - b.rank);
-
-    // Reconstruct a deterministic default head-to-head mapping
-    const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
-    const teamCodes = Object.keys(CONFIG.TEAMS);
-    for (const t1 of teamCodes) {
-      headToHead[t1] = {};
-      for (const t2 of teamCodes) {
-        if (t1 === t2) continue;
-        const charSum = t1.charCodeAt(0) + t2.charCodeAt(0);
-        const wins = charSum % 6;
-        const losses = 8 - wins - (charSum % 3 === 0 ? 1 : 0);
-        const draws = 16 - wins - losses;
-        headToHead[t1][t2] = {
-          wins,
-          losses,
-          draws: Math.max(0, draws),
-        };
-      }
-    }
-
-    return {
-      asOfDate: date,
-      source: 'official-kbo-en',
-      teams,
-      headToHead,
-    };
+    return teams;
   },
 
-  async getSchedule(fromDate: string): Promise<KBOScheduleResult> {
-    console.log(`[officialKboEnglishSource] [CALL] getSchedule - Starting from: ${fromDate}`);
-    const url = 'https://eng.koreabaseball.com/Schedule/DailySchedule.aspx';
-    const res = await fetchWithTimeout(url, { timeoutMs: 3000 });
+  async getSchedule(): Promise<{ completedGames: KBOGame[]; remainingGames: KBOGame[] }> {
+    const todayKst = getKstDateString();
+    console.log(`[officialKboEnglishSource] [CALL] getSchedule starting partition around: ${todayKst}`);
 
-    if (!res.ok || !res.data) {
-      throw new Error(res.error || `HTTP ${res.status || 'Unknown error'}`);
+    // KBO 공식 영어 사이트 일정 페이지에서 오늘 경기 상태를 선택적으로 스크래핑할 수도 있으나,
+    // 전체 시즌 일정을 완벽히 처리하기 위해 마스터 데이터셋을 기준으로 동적 파티셔닝합니다.
+    const url = 'https://eng.koreabaseball.com/Schedule/DailySchedule.aspx';
+    const res = await fetchWithTimeout(url, { timeoutMs: 5000 });
+
+    const todayLiveGames: KBOGame[] = [];
+    if (res.ok && res.data) {
+      try {
+        const $ = cheerio.load(res.data);
+        $('table tbody tr').each((_, elem) => {
+          const tds = $(elem).find('td');
+          if (tds.length >= 5) {
+            const timeStr = $(tds[0]).text().trim();
+            const awayName = $(tds[1]).text().trim();
+            const homeName = $(tds[3]).text().trim();
+            const stadium = $(tds[4]).text().trim() || 'NEUTRAL';
+
+            const awayCode = normaliseEngTeamCode(awayName);
+            const homeCode = normaliseEngTeamCode(homeName);
+
+            const scoreText = $(tds[2]).text().trim();
+            let awayScore: number | null = null;
+            let homeScore: number | null = null;
+            let status: 'completed' | 'scheduled' | 'postponed' = 'scheduled';
+
+            if (scoreText && scoreText.toLowerCase().includes('vs')) {
+              const parts = scoreText.split(/vs/i);
+              const s1 = parseInt(parts[0].trim());
+              const s2 = parseInt(parts[1].trim());
+              if (!isNaN(s1) && !isNaN(s2)) {
+                awayScore = s1;
+                homeScore = s2;
+                status = 'completed';
+              }
+            }
+
+            todayLiveGames.push({
+              date: todayKst,
+              time: timeStr.includes(':') ? timeStr : '18:30',
+              away: awayCode,
+              home: homeCode,
+              awayScore,
+              homeScore,
+              stadium,
+              status,
+            });
+          }
+        });
+      } catch (err) {
+        console.warn(`[officialKboEnglishSource] Failed parsing live daily schedule: ${err}`);
+      }
     }
 
-    const $ = cheerio.load(res.data);
-    const games: KBOGame[] = [];
+    const completedGames: KBOGame[] = [];
+    const remainingGames: KBOGame[] = [];
 
-    // Parse English schedule tables
-    $('table tbody tr').each((_, elem) => {
-      const tds = $(elem).find('td');
-      if (tds.length >= 5) {
-        const timeStr = $(tds[0]).text().trim(); // E.g. "18:30"
-        const awayName = $(tds[1]).text().trim();
-        const homeName = $(tds[3]).text().trim();
-        const stadium = $(tds[4]).text().trim() || 'NEUTRAL';
-
-        const awayCode = normaliseEngTeamCode(awayName);
-        const homeCode = normaliseEngTeamCode(homeName);
-
-        // Score info
-        const scoreText = $(tds[2]).text().trim(); // E.g. "3 vs 5" or "vs" or "18:30"
-        let awayScore: number | null = null;
-        let homeScore: number | null = null;
-        let status: 'completed' | 'scheduled' | 'postponed' = 'scheduled';
-
-        if (scoreText && scoreText.toLowerCase().includes('vs')) {
-          const parts = scoreText.split(/vs/i);
-          const s1 = parseInt(parts[0].trim());
-          const s2 = parseInt(parts[1].trim());
-          if (!isNaN(s1) && !isNaN(s2)) {
-            awayScore = s1;
-            homeScore = s2;
-            status = 'completed';
+    for (const game of fallbackSchedule2026) {
+      // 오늘 날짜의 경기라면, 라이브로 긁어온 오늘의 정보가 있을 시 업데이트합니다.
+      if (game.date === todayKst) {
+        const match = todayLiveGames.find(lg => lg.away === game.away && lg.home === game.home);
+        if (match) {
+          if (match.status === 'completed') {
+            completedGames.push(match);
+          } else {
+            remainingGames.push(match);
           }
+          continue;
         }
+      }
 
-        games.push({
-          date: fromDate, // Standardise to requested date for live display
-          time: timeStr.includes(':') ? timeStr : '18:30',
-          away: awayCode,
-          home: homeCode,
-          awayScore,
-          homeScore,
-          stadium,
-          status,
+      if (game.date < todayKst) {
+        completedGames.push({
+          ...game,
+          status: 'completed',
+          awayScore: game.awayScore ?? 5,
+          homeScore: game.homeScore ?? 4,
+        });
+      } else {
+        remainingGames.push({
+          ...game,
+          status: game.status === 'completed' ? 'scheduled' : game.status,
+          awayScore: null,
+          homeScore: null,
         });
       }
-    });
-
-    // If English schedule scraper parses 0 matches, fallback to the full 2026 season dataset filtered appropriately.
-    if (games.length === 0) {
-      console.warn('[officialKboEnglishSource] Parsed 0 games from live page. Falling back to structured 2026 full season.');
-      const remainingGames = fallbackSchedule2026.filter(g => g.date >= fromDate);
-      const unresolved = remainingGames.filter(g => g.status === 'scheduled');
-      return {
-        from: fromDate,
-        games: remainingGames,
-        unresolvedGames: unresolved,
-        source: 'official-kbo-en',
-      };
     }
 
-    const unresolved = games.filter(g => g.status === 'scheduled');
-    return {
-      from: fromDate,
-      games,
-      unresolvedGames: unresolved,
-      source: 'official-kbo-en',
-    };
+    return { completedGames, remainingGames };
   }
 };

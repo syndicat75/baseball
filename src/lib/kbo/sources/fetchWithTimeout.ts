@@ -26,7 +26,7 @@ export interface FetchWithTimeoutResult {
  */
 export async function fetchWithTimeout(url: string, options: FetchWithTimeoutOptions = {}): Promise<FetchWithTimeoutResult> {
   const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
-  const timeoutMs = options.timeoutMs ?? 3000;
+  const timeoutMs = options.timeoutMs ?? 5000;
   
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

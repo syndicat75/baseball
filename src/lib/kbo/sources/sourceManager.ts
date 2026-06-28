@@ -1,27 +1,17 @@
 /**
  * @file sourceManager.ts
  * @description KBO 데이터 수집을 위한 다중 데이터 소스 통합 관리자(Source Manager)입니다.
- * 우선순위에 따라 각 데이터 소스(MyKBOStats, KBO 공식 영문, TheSportsDB, 내장 백업)를 순차 호출하며,
- * 최대 3초의 타임아웃을 적용해 무중단 가동을 보장합니다.
+ * 우선순위에 따라 각 데이터 소스(KBO 공식 영문, MyKBOStats, AiScore, 내장 백업)를 순차 호출하며,
+ * 최대 5초의 타임아웃을 적용해 무중단 가동을 보장합니다.
  */
 
-import { KBOStandingsResult, KBOScheduleResult } from '../../../types';
-import { myKboStatsSource } from './myKboStatsSource';
+import { KBOStandingsResult, KBOScheduleResult, KBOGame, StandingsTeam } from '../../../types';
+import { KboDataSource, KBOStanding } from './index';
 import { officialKboEnglishSource } from './officialKboEnglishSource';
-import { theSportsDbSource } from './theSportsDbSource';
+import { myKboStatsSource } from './myKboStatsSource';
+import { aiScoreSource } from './aiScoreSource';
 import { fallbackSource } from './fallbackSource';
-
-/**
- * @interface KboDataSource
- * @description 개별 데이터 수집 엔진이 준수해야 하는 공통 규격입니다.
- */
-export interface KboDataSource {
-  id: string;
-  label: string;
-  priority: number;
-  getStandings(date: string): Promise<KBOStandingsResult>;
-  getSchedule(fromDate: string): Promise<KBOScheduleResult>;
-}
+import { CONFIG } from '../../../config';
 
 /**
  * @interface FailedSourceAttempt
@@ -55,64 +45,112 @@ export interface SourceManagerScheduleResult extends KBOScheduleResult {
 }
 
 /**
- * @description 우선순위에 따라 정렬된 데이터 소스 목록입니다.
- * 1순위: MyKBOStats, 2순위: KBO 공식 영문, 3순위: TheSportsDB, 4순위: 내장 백업
+ * 우선순위에 따라 정렬된 데이터 소스 목록입니다.
+ * 1순위: KBO 공식 영문, 2순위: MyKBOStats, 3순위: AiScore, 4순위: 내장 백업
  */
 export const SOURCES: KboDataSource[] = [
-  myKboStatsSource,
   officialKboEnglishSource,
-  theSportsDbSource,
+  myKboStatsSource,
+  aiScoreSource,
   fallbackSource,
 ].sort((a, b) => a.priority - b.priority);
 
 /**
+ * @function getEstimatedHeadToHead
+ * @description 수집된 팀 정보와 승률을 기반으로 상대 전적 기록을 결정론적으로 추정합니다.
+ */
+export function getEstimatedHeadToHead(teams: KBOStanding[]): Record<string, Record<string, { wins: number; losses: number; draws: number }>> {
+  const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
+  const teamCodes = Object.keys(CONFIG.TEAMS);
+
+  for (const t1 of teamCodes) {
+    headToHead[t1] = {};
+    const t1Data = teams.find(t => t.team === t1);
+    const t1Wins = t1Data?.wins ?? 30;
+    const t1Losses = t1Data?.losses ?? 30;
+    const t1Rate = t1Wins / (t1Wins + t1Losses || 1);
+
+    for (const t2 of teamCodes) {
+      if (t1 === t2) continue;
+      const t2Data = teams.find(t => t.team === t2);
+      const t2Wins = t2Data?.wins ?? 30;
+      const t2Losses = t2Data?.losses ?? 30;
+      const t2Rate = t2Wins / (t2Wins + t2Losses || 1);
+
+      const gamesPlayed = 8; // 추정 경기 수
+      const ratio = t1Rate / (t1Rate + t2Rate || 1);
+      const wins = Math.round(gamesPlayed * ratio);
+      const losses = gamesPlayed - wins;
+
+      headToHead[t1][t2] = { wins, losses, draws: 0 };
+    }
+  }
+  return headToHead;
+}
+
+/**
  * @function getBestAvailableStandings
  * @description 등록된 순위 데이터 소스들을 우선순위 순서대로 시도하여 성공한 즉시 결과를 반환합니다.
- * @param {string} date - 수집 기준 일자 (YYYY-MM-DD)
+ * @param {string} [date] - 수집 기준 일자 (생략 시 KST 기준 오늘 날짜)
  * @returns {Promise<SourceManagerStandingsResult>} 수집 완료된 순위 데이터 및 메타데이터
  */
-export async function getBestAvailableStandings(date: string): Promise<SourceManagerStandingsResult> {
-  console.log(`[SourceManager] [CALL] getBestAvailableStandings(date: "${date}")호출됨.`);
+export async function getBestAvailableStandings(date?: string): Promise<SourceManagerStandingsResult> {
+  const targetDate = date || new Date().toISOString().split('T')[0];
+  console.log(`[SourceManager] [CALL] getBestAvailableStandings(date: "${targetDate}")`);
+  
   const failedSources: FailedSourceAttempt[] = [];
   const warnings: string[] = [];
 
   for (const source of SOURCES) {
-    console.log(`[SourceManager] standings 시도 중 -> [${source.id}] (우선순위: ${source.priority})`);
+    console.log(`[SourceManager] Standings 시도 중 -> [${source.id}] (우선순위: ${source.priority})`);
     
-    // 3초 타임아웃 약속 생성
+    // 5초 타임아웃 약속 생성
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('3000ms 시간 초과')), 3000);
+      setTimeout(() => reject(new Error('5000ms 시간 초과')), 5000);
     });
 
     try {
-      // 해당 소스로부터 데이터 로딩 및 타임아웃 레이스 실행
-      const result = await Promise.race([
-        source.getStandings(date),
+      const parsedTeams = await Promise.race([
+        source.getStandings(),
         timeoutPromise
       ]);
 
-      if (result && result.teams && result.teams.length === 10) {
-        console.log(`[SourceManager] standings 수집 성공! 소스 ID: "${source.id}"`);
+      if (parsedTeams && parsedTeams.length === 10) {
+        console.log(`[SourceManager] Standings 수집 성공! 소스 ID: "${source.id}"`);
         
-        // 1순위 이외의 소스를 사용한 경우 유저 경고 알림 문구 작성
-        if (source.id !== 'mykbostats') {
-          warnings.push(`기본 소스(MyKBOStats) 수집 실패로 인해 보조 소스(${source.label})로 대체 연동되었습니다.`);
+        if (source.id !== 'official-kbo-en') {
+          warnings.push(`기본 소스(KBO 공식 영문) 수집 실패로 인해 보조 소스(${source.label})로 대체 연동되었습니다.`);
         }
 
+        const formattedTeams: StandingsTeam[] = parsedTeams.map(t => ({
+          team: t.team,
+          nameKo: t.nameKo || CONFIG.TEAMS[t.team]?.nameKo || t.team,
+          games: t.games,
+          wins: t.wins,
+          losses: t.losses,
+          draws: t.draws,
+          winRate: t.winRate,
+          rank: t.rank,
+        }));
+
+        const headToHead = getEstimatedHeadToHead(parsedTeams);
+
         return {
-          ...result,
-          source: result.source || source.id,
+          asOfDate: targetDate,
+          source: source.id,
           sourceLabel: source.label,
           fetchedAt: new Date().toISOString(),
+          teams: formattedTeams,
+          headToHead,
           warnings: warnings.length > 0 ? warnings : undefined,
           failedSources: failedSources.length > 0 ? failedSources : undefined,
         };
       } else {
-        throw new Error(`데이터 규격 위반 (수집된 팀 수: ${result?.teams?.length || 0}개)`);
+        throw new Error(`데이터 규격 위반 (수집된 팀 수: ${parsedTeams?.length || 0}개)`);
       }
     } catch (err: any) {
       const reason = err.message || String(err);
-      console.warn(`[SourceManager] standings 소스 "${source.id}" 장애 감지: ${reason}`);
+      console.warn(`[SourceManager] Standings 소스 "${source.id}" 장애 감지: ${reason}`);
       failedSources.push({
         source: source.id,
         reason,
@@ -120,15 +158,29 @@ export async function getBestAvailableStandings(date: string): Promise<SourceMan
     }
   }
 
-  // 만약 모든 소스가 기적적으로 실패했을 경우 마지막 방어막으로 내장 백업 강제 기동
-  console.error('[SourceManager] 모든 standings 소스 수집 실패! 로컬 백업 긴급 기동.');
-  const emergency = await fallbackSource.getStandings(date);
+  // 모든 수립 수단 실패 시 마지막 예비 방어막 기동
+  console.error('[SourceManager] 모든 Standings 소스 수집 실패! 로컬 백업 긴급 기동.');
+  const backupTeams = await fallbackSource.getStandings();
+  const formattedBackup = backupTeams.map(t => ({
+    team: t.team,
+    nameKo: t.nameKo || CONFIG.TEAMS[t.team]?.nameKo || t.team,
+    games: t.games,
+    wins: t.wins,
+    losses: t.losses,
+    draws: t.draws,
+    winRate: t.winRate,
+    rank: t.rank,
+  }));
+  const backupHeadToHead = getEstimatedHeadToHead(backupTeams);
+
   return {
-    ...emergency,
+    asOfDate: targetDate,
     source: 'bundled-fallback',
     sourceLabel: fallbackSource.label,
     fetchedAt: new Date().toISOString(),
-    warnings: ['모든 원격 데이터 수집 장치가 일시적으로 중단되어, 내장 예비 시뮬레이션 데이터베이스를 사용해 확률을 연산합니다.'],
+    teams: formattedBackup,
+    headToHead: backupHeadToHead,
+    warnings: ['모든 원격 데이터 수집 장치가 일시적으로 중단되어, 내장 예비 시뮬레이션 데이터를 사용해 확률을 연산합니다.'],
     failedSources,
   };
 }
@@ -136,37 +188,44 @@ export async function getBestAvailableStandings(date: string): Promise<SourceMan
 /**
  * @function getBestAvailableSchedule
  * @description 등록된 일정 데이터 소스들을 우선순위 순서대로 시도하여 성공한 즉시 결과를 반환합니다.
- * @param {string} fromDate - 일정 수집 시작 일자 (YYYY-MM-DD)
+ * @param {string} [fromDate] - 일정 수집 시작 일자 (생략 시 KST 기준 오늘 날짜)
  * @returns {Promise<SourceManagerScheduleResult>} 수집 완료된 일정 데이터 및 메타데이터
  */
-export async function getBestAvailableSchedule(fromDate: string): Promise<SourceManagerScheduleResult> {
-  console.log(`[SourceManager] [CALL] getBestAvailableSchedule(fromDate: "${fromDate}")호출됨.`);
+export async function getBestAvailableSchedule(fromDate?: string): Promise<SourceManagerScheduleResult> {
+  const targetDate = fromDate || new Date().toISOString().split('T')[0];
+  console.log(`[SourceManager] [CALL] getBestAvailableSchedule(fromDate: "${targetDate}")`);
   const failedSources: FailedSourceAttempt[] = [];
   const warnings: string[] = [];
 
   for (const source of SOURCES) {
-    console.log(`[SourceManager] schedule 시도 중 -> [${source.id}] (우선순위: ${source.priority})`);
+    console.log(`[SourceManager] Schedule 시도 중 -> [${source.id}] (우선순위: ${source.priority})`);
 
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('3000ms 시간 초과')), 3000);
+      setTimeout(() => reject(new Error('5000ms 시간 초과')), 5000);
     });
 
     try {
       const result = await Promise.race([
-        source.getSchedule(fromDate),
+        source.getSchedule(),
         timeoutPromise
       ]);
 
-      if (result && result.games && result.games.length > 0) {
-        console.log(`[SourceManager] schedule 수집 성공! 소스 ID: "${source.id}" (경기 수: ${result.games.length})`);
+      if (result && (result.completedGames.length > 0 || result.remainingGames.length > 0)) {
+        console.log(`[SourceManager] Schedule 수집 성공! 소스 ID: "${source.id}" (남은 경기 수: ${result.remainingGames.length})`);
         
-        if (source.id !== 'mykbostats') {
-          warnings.push(`기본 소스(MyKBOStats) 일정 수집 실패로 인해 보조 소스(${source.label})로 대체 연동되었습니다.`);
+        if (source.id !== 'official-kbo-en') {
+          warnings.push(`기본 소스(KBO 공식 영문) 일정 수집 실패로 인해 보조 소스(${source.label})로 대체 연동되었습니다.`);
         }
 
+        // 전체 일정을 하나의 리스트로 합치고, 그 중 unresolved(scheduled) 경기를 가려냅니다.
+        const allGames = [...result.completedGames, ...result.remainingGames];
+        const unresolvedGames = result.remainingGames.filter(g => g.status === 'scheduled');
+
         return {
-          ...result,
-          source: result.source || source.id,
+          from: targetDate,
+          games: allGames,
+          unresolvedGames,
+          source: source.id,
           sourceLabel: source.label,
           fetchedAt: new Date().toISOString(),
           warnings: warnings.length > 0 ? warnings : undefined,
@@ -177,7 +236,7 @@ export async function getBestAvailableSchedule(fromDate: string): Promise<Source
       }
     } catch (err: any) {
       const reason = err.message || String(err);
-      console.warn(`[SourceManager] schedule 소스 "${source.id}" 장애 감지: ${reason}`);
+      console.warn(`[SourceManager] Schedule 소스 "${source.id}" 장애 감지: ${reason}`);
       failedSources.push({
         source: source.id,
         reason,
@@ -185,10 +244,15 @@ export async function getBestAvailableSchedule(fromDate: string): Promise<Source
     }
   }
 
-  console.error('[SourceManager] 모든 schedule 소스 수집 실패! 로컬 백업 긴급 기동.');
-  const emergency = await fallbackSource.getSchedule(fromDate);
+  console.error('[SourceManager] 모든 Schedule 소스 수집 실패! 로컬 백업 긴급 기동.');
+  const emergency = await fallbackSource.getSchedule();
+  const allEmergencyGames = [...emergency.completedGames, ...emergency.remainingGames];
+  const unresolvedEmergency = emergency.remainingGames.filter(g => g.status === 'scheduled');
+
   return {
-    ...emergency,
+    from: targetDate,
+    games: allEmergencyGames,
+    unresolvedGames: unresolvedEmergency,
     source: 'bundled-fallback',
     sourceLabel: fallbackSource.label,
     fetchedAt: new Date().toISOString(),

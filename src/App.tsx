@@ -25,6 +25,9 @@ interface FullSimulationData {
   sourceLabel?: string;
   scheduleSource?: string;
   scheduleSourceLabel?: string;
+  originalSource?: string;
+  originalSourceLabel?: string;
+  fetchedAt?: string;
   errorType?: string;
   errorMessage?: string;
   warnings?: string[];
@@ -49,6 +52,7 @@ export default function App() {
   const [simData, setSimData] = useState<FullSimulationData | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isFallbackSample, setIsFallbackSample] = useState<boolean>(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
   // Additional metadata for multi-source visualization
   const [standingsSourceInfo, setStandingsSourceInfo] = useState<{
@@ -86,8 +90,6 @@ export default function App() {
 
   /**
    * Fetches simulation results and standings snapshots from the backend.
-   * 
-   * @param forceRefresh - If true, triggers a fresh scraper execution on the backend.
    */
   const fetchSimulationResults = async (forceRefresh = false) => {
     console.log(`[App] [CALL] fetchSimulationResults - Date: ${selectedDate}, Iterations: ${iterations}, Model: ${selectedModel}, Seed: ${seed}, Refresh: ${forceRefresh}`);
@@ -95,7 +97,7 @@ export default function App() {
     setError(null);
 
     try {
-      const url = `/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}&refresh=${forceRefresh}`;
+      const url = `/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`;
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -112,17 +114,17 @@ export default function App() {
       console.log(`[App] Successfully received simulation data from server. Source: "${data.source}"`);
       
       setSimData(data);
-      setIsFallbackSample(data.source === 'fallback-sample' || data.source === 'bundled-fallback');
+      setIsFallbackSample(data.originalSource === 'bundled-fallback');
       
       setStandingsSourceInfo({
-        source: data.source,
-        sourceLabel: data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source: data.originalSource || data.source,
+        sourceLabel: data.originalSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
         failedSources: data.failedSources,
       });
 
       setScheduleSourceInfo({
-        source: data.scheduleSource || data.source,
-        sourceLabel: data.scheduleSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source: data.originalSource || data.source,
+        sourceLabel: data.originalSourceLabel || data.sourceLabel || (data.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
         failedSources: data.failedSources,
       });
 
@@ -131,8 +133,8 @@ export default function App() {
       setDiagnostic(prev => ({
         ...prev,
         health: 'ok',
-        standings: data.source,
-        schedule: data.scheduleSource || data.source,
+        standings: 'ok',
+        schedule: 'ok',
         simulate: 'ok',
         status: 'success',
         lastSuccessTime: currentTime
@@ -145,10 +147,29 @@ export default function App() {
     }
   };
 
+  /**
+   * 로컬 JSON 데이터 파일을 수동으로 다시 불러옵니다.
+   */
+  const handleRefreshData = async () => {
+    console.log('[App] [CALL] handleRefreshData - 로컬 JSON 데이터 새로고침 가동');
+    setIsLoading(true);
+    try {
+      await fetchSimulationResults(false);
+      setRefreshMessage('데이터 파일을 성공적으로 다시 불러왔습니다.');
+      setTimeout(() => {
+        setRefreshMessage(null);
+      }, 4000);
+    } catch (err: any) {
+      console.error('[App] handleRefreshData 실패:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
 
   /**
    * Runs sequential diagnostics and retries data fetching.
-   * Tests /api/health, /api/kbo/standings, /api/kbo/schedule, and /api/simulate in order.
+   * Tests static JSON load, 10 team validation, remaining games and monte-carlo simulator execution in order.
    * Reports exactly where any failure occurs and maps statuses beautifully.
    */
   const runDiagnosticsAndRetry = async () => {
@@ -159,7 +180,7 @@ export default function App() {
       standings: 'idle',
       schedule: 'idle',
       simulate: 'idle',
-      currentStep: '1단계: API 서버 상태 확인 (/api/health)...',
+      currentStep: '1단계: 정적 JSON 데이터 파일 가동성 검증 (/api/kbo/standings)...',
       errorDetails: null,
       lastSuccessTime: diagnostic.lastSuccessTime,
     });
@@ -167,90 +188,83 @@ export default function App() {
     setError(null);
 
     try {
-      // Step 1: Health Check
-      const healthRes = await fetch('/api/health');
-      if (!healthRes.ok) {
-        let errData;
-        try {
-          errData = await healthRes.json();
-        } catch {}
-        throw new Error(errData?.errorMessage || `API 헬스체크 실패 (상태 코드: ${healthRes.status}). API route가 배포되지 않았거나 꺼져 있을 수 있습니다.`);
-      }
-      const healthData = await healthRes.json();
-      if (!healthData.ok) {
-        throw new Error('API 헬스체크 응답이 정상 범위(ok: true)를 벗어났습니다.');
-      }
-
-      setDiagnostic(prev => ({
-        ...prev,
-        health: 'ok',
-        standings: 'checking',
-        currentStep: '2단계: KBO standings 데이터 수집 검증 (/api/kbo/standings)...',
-      }));
-
-      // Step 2: Standings Check
+      // Step 1: Static JSON Load Check
       const standingsRes = await fetch(`/api/kbo/standings?date=${selectedDate}`);
       if (!standingsRes.ok) {
         let errData;
         try {
           errData = await standingsRes.json();
         } catch {}
-        throw new Error(errData?.errorMessage || `KBO 순위 수집 API 호출 실패 (상태 코드: ${standingsRes.status}).`);
+        throw new Error(errData?.errorMessage || `KBO 순위 데이터 API 호출 실패 (상태 코드: ${standingsRes.status}). 정적 JSON 캐시 부재.`);
       }
       const standingsData = await standingsRes.json();
       
-      const standingsStatus = standingsData.source || 'official-kbo';
       setStandingsSourceInfo({
-        source: standingsData.source,
-        sourceLabel: standingsData.sourceLabel || (standingsData.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source: standingsData.originalSource || standingsData.source,
+        sourceLabel: standingsData.originalSourceLabel || standingsData.sourceLabel,
         failedSources: standingsData.failedSources,
       });
 
       setDiagnostic(prev => ({
         ...prev,
-        standings: standingsStatus,
-        schedule: 'checking',
-        currentStep: '3단계: KBO 일정 데이터 수집 검증 (/api/kbo/schedule)...',
+        health: 'ok',
+        standings: 'checking',
+        currentStep: '2단계: 순위 데이터 10개 팀 존재 여부 무결성 검증...',
       }));
 
-      // Step 3: Schedule Check
+      // Step 2: Validate 10 Teams
+      if (!standingsData.teams || standingsData.teams.length !== 10) {
+        throw new Error(`순위 데이터 무결성 검증 실패: 로드된 팀이 ${standingsData.teams?.length || 0}개입니다 (10개 팀이 수집되어 있어야 합니다).`);
+      }
+
+      setDiagnostic(prev => ({
+        ...prev,
+        standings: 'ok',
+        schedule: 'checking',
+        currentStep: '3단계: 남은 경기 데이터 존재 여부 확인 (/api/kbo/schedule)...',
+      }));
+
+      // Step 3: Validate Remaining Games
       const scheduleRes = await fetch(`/api/kbo/schedule?from=${selectedDate}`);
       if (!scheduleRes.ok) {
         let errData;
         try {
           errData = await scheduleRes.json();
         } catch {}
-        throw new Error(errData?.errorMessage || `KBO 일정 수집 API 호출 실패 (상태 코드: ${scheduleRes.status}).`);
+        throw new Error(errData?.errorMessage || `KBO 일정 및 순연 데이터 API 호출 실패 (상태 코드: ${scheduleRes.status}).`);
       }
       const scheduleData = await scheduleRes.json();
 
-      const scheduleStatus = scheduleData.source || 'official-kbo';
       setScheduleSourceInfo({
-        source: scheduleData.source,
-        sourceLabel: scheduleData.sourceLabel || (scheduleData.source === 'bundled-fallback' ? '번들 로컬 예비 데이터' : '공식 데이터'),
+        source: scheduleData.originalSource || scheduleData.source,
+        sourceLabel: scheduleData.originalSourceLabel || scheduleData.sourceLabel,
         failedSources: scheduleData.failedSources,
       });
 
+      if (!scheduleData.remainingGames || scheduleData.remainingGames.length === 0) {
+        throw new Error('일정 데이터 무결성 검증 실패: 잔여 일정이 존재하지 않거나 수집되지 않았습니다.');
+      }
+
       setDiagnostic(prev => ({
         ...prev,
-        schedule: scheduleStatus,
+        schedule: 'ok',
         simulate: 'checking',
-        currentStep: '4단계: 전체 시즌 시뮬레이션 계산 검증 (/api/simulate)...',
+        currentStep: '4단계: 가을야구 시뮬레이션 연산 가동성 검증 (/api/simulate)...',
       }));
 
-      // Step 4: Simulation Check
+      // Step 4: Validate Simulation Calculation
       const simulateRes = await fetch(`/api/simulate?date=${selectedDate}&iterations=${iterations}&model=${selectedModel}&seed=${seed}`);
       if (!simulateRes.ok) {
         let errData;
         try {
           errData = await simulateRes.json();
         } catch {}
-        throw new Error(errData?.errorMessage || `시뮬레이션 API 호출 실패 (상태 코드: ${simulateRes.status}).`);
+        throw new Error(errData?.errorMessage || `시뮬레이션 연산 API 호출 실패 (상태 코드: ${simulateRes.status}).`);
       }
       const simulateData = await simulateRes.json();
       
       setSimData(simulateData);
-      setIsFallbackSample(simulateData.source === 'fallback-sample' || simulateData.source === 'bundled-fallback');
+      setIsFallbackSample(simulateData.originalSource === 'bundled-fallback');
       
       const currentTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setLastUpdated(currentTime);
@@ -258,10 +272,10 @@ export default function App() {
       setDiagnostic({
         status: 'success',
         health: 'ok',
-        standings: standingsStatus,
-        schedule: scheduleStatus,
+        standings: 'ok',
+        schedule: 'ok',
         simulate: 'ok',
-        currentStep: '자가진단 완료: 모든 API가 보조 또는 예비 엔진을 통해 정상 복구 및 작동 중입니다!',
+        currentStep: '자가진단 완료: 정적 JSON 데이터 파일 로딩, 10개 팀 순위 정합성, 잔여 경기 검증, 몬테카를로 엔진 구동이 모두 정상입니다!',
         errorDetails: null,
         lastSuccessTime: currentTime,
       });
@@ -281,7 +295,7 @@ export default function App() {
           standings: nextStandings,
           schedule: nextSchedule,
           simulate: nextSimulate,
-          currentStep: '자가진단 결과 통신 장애 또는 예측 계산 실패',
+          currentStep: '자가진단 실패: 데이터 무결성 검증 탈락 또는 가을야구 시뮬레이션 장애',
           errorDetails: errMsg,
           lastSuccessTime: prev.lastSuccessTime,
         };
@@ -329,71 +343,92 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 mt-8 space-y-6">
         
         {/* Connection Status Banner */}
-        <div className={`border rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs animate-fade-in ${
-          error ? 'bg-rose-50 border-rose-200 text-rose-900' :
-          simData?.source === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-900' :
-          (simData?.source === 'mykbostats' || simData?.source === 'thesportsdb' || simData?.source === 'aiscore') ? 'bg-amber-50 border-amber-200 text-amber-900' :
-          'bg-emerald-50 border-emerald-200 text-emerald-900'
-        }`}>
-          <div className="flex-1 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-bold text-slate-700">데이터 연동 상태:</span>
-              {error ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 font-bold border border-rose-200 animate-pulse">
-                  <span className="w-2 h-2 rounded-full bg-rose-500" />
-                  연동 오류가 감지되었습니다. (자가진단 점검 필요)
-                </span>
-              ) : simData?.source === 'bundled-fallback' ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-orange-100 text-orange-800 font-bold border border-orange-200">
-                  <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-                  주황 경고: 예비 데이터 연동 중 (내장 번들 활용)
-                </span>
-              ) : (simData?.source === 'mykbostats' || simData?.source === 'thesportsdb' || simData?.source === 'aiscore') ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  노란 경고: {simData?.sourceLabel || '보조 데이터 연동 완료'}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  정상: {simData?.sourceLabel || '실시간 KBO 공식 연동 완료'}
-                </span>
-              )}
-            </div>
+        {(() => {
+          const isCacheFallback = simData?.warnings?.some(w => w.includes('캐시') || w.includes('실패') || w.includes('유지'));
+          const isBundledFallback = simData?.originalSource === 'bundled-fallback';
 
-            <div className="text-[11px] text-slate-600 space-y-0.5 pt-1.5 font-medium">
-              <div>• 사용 데이터: <strong className="text-slate-800 font-semibold">{simData?.sourceLabel || '실시간 KBO 공식 데이터'}</strong></div>
-              {simData && simData.source === 'bundled-fallback' && (
-                <div className="text-orange-600 font-bold">• 모든 원격 데이터 소스 수집 실패로 인해 내장 예비 데이터셋을 사용하고 있습니다.</div>
-              )}
-              {simData && (
-                <div className="text-emerald-700 font-semibold">• 계산 완료 여부: 수집된 KBO 데이터 기준으로 가을야구 연산이 정상 완료됨</div>
+          return (
+            <div className={`border rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs animate-fade-in ${
+              error ? 'bg-rose-50 border-rose-200 text-rose-900' :
+              isBundledFallback ? 'bg-orange-50 border-orange-200 text-orange-900' :
+              isCacheFallback ? 'bg-amber-50 border-amber-200 text-amber-900' :
+              'bg-emerald-50 border-emerald-200 text-emerald-900'
+            }`}>
+              <div className="flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-700">데이터 연동 상태:</span>
+                  {error ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 font-bold border border-rose-200 animate-pulse">
+                      <span className="w-2 h-2 rounded-full bg-rose-500" />
+                      연동 오류가 감지되었습니다. (자가진단 점검 필요)
+                    </span>
+                  ) : isBundledFallback ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-orange-100 text-orange-800 font-bold border border-orange-200">
+                      <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                      주황 경고: 예비 데이터 연동 중 (내장 번들 활용)
+                    </span>
+                  ) : isCacheFallback ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-200">
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      노란 경고: 예약 수집 장애 (기존 캐시 활용)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      정상: 예약 수집 JSON 연동 완료
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px] text-slate-600 space-y-1 pt-1.5 font-medium">
+                  <div>• 사용 데이터: <strong className="text-slate-800 font-bold">{simData?.sourceLabel || '예약 수집 JSON 데이터'}</strong></div>
+                  <div>• 원본 출처: <strong className="text-slate-800 font-bold">{simData?.originalSourceLabel || 'KBO 공식 영문 데이터 / MyKBOStats / AiScore / 마지막 성공 데이터'}</strong></div>
+                  <div>• 마지막 갱신: <strong className="text-slate-800 font-bold">{simData?.fetchedAt ? new Date(simData.fetchedAt).toLocaleString('ko-KR') : lastUpdated || '-'}</strong></div>
+                  
+                  {isCacheFallback && (
+                    <div className="text-amber-700 font-bold mt-1">⚠️ 실시간 수집은 실패했지만, 마지막 성공 데이터 기준으로 계산 중입니다.</div>
+                  )}
+                  {isBundledFallback && (
+                    <div className="text-orange-600 font-bold mt-1">⚠️ 모든 원격 수집 소스 장애로 인해 하드코딩된 예비 데이터셋을 사용 중입니다.</div>
+                  )}
+                  {simData && (
+                    <div className="text-emerald-700 font-semibold">• 계산 완료 여부: 수집된 KBO 데이터 기준으로 가을야구 연산이 정상 완료됨</div>
+                  )}
+                </div>
+              </div>
+              
+              {(error || simData?.errorMessage || (simData?.warnings && simData.warnings.length > 0)) && (
+                <div className="text-slate-600 flex flex-col gap-1 bg-white/75 p-3 rounded-lg border border-slate-200/80 max-w-xl text-[11px] font-mono shadow-inner">
+                  <span className="font-bold text-slate-700 flex items-center gap-1">ℹ️ 상세 보고 및 분석 알림:</span>
+                  <span className="text-slate-800 leading-relaxed max-h-24 overflow-y-auto">
+                    {error || simData?.errorMessage}
+                    {simData?.warnings && simData.warnings.map((w, idx) => (
+                      <div key={idx} className="text-amber-700 font-semibold mt-1">• {w}</div>
+                    ))}
+                  </span>
+                </div>
               )}
             </div>
-          </div>
-          
-          {(error || simData?.errorMessage || (simData?.warnings && simData.warnings.length > 0)) && (
-            <div className="text-slate-600 flex flex-col gap-1 bg-white/75 p-3 rounded-lg border border-slate-200/80 max-w-xl text-[11px] font-mono shadow-inner">
-              <span className="font-bold text-slate-700 flex items-center gap-1">ℹ️ 상세 보고 및 분석 알림:</span>
-              <span className="text-slate-800 leading-relaxed max-h-24 overflow-y-auto">
-                {error || simData?.errorMessage}
-                {simData?.warnings && simData.warnings.map((w, idx) => (
-                  <div key={idx} className="text-amber-700 font-semibold mt-1">• {w}</div>
-                ))}
-              </span>
-            </div>
-          )}
-        </div>
+          );
+        })()}
         
         {/* Row 1: Configuration & Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <DateControl
-            selectedDate={selectedDate}
-            onDateChange={setSelectedDate}
-            onRefresh={() => fetchSimulationResults(true)}
-            isLoading={isLoading}
-            lastUpdated={lastUpdated}
-          />
+          <div className="space-y-4">
+            <DateControl
+              selectedDate={selectedDate}
+              onDateChange={setSelectedDate}
+              onRefresh={handleRefreshData}
+              isLoading={isLoading}
+              lastUpdated={simData?.fetchedAt ? new Date(simData.fetchedAt).toLocaleTimeString('ko-KR') : lastUpdated}
+            />
+            {refreshMessage && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-3.5 text-xs font-bold flex items-center gap-2 animate-fade-in shadow-sm">
+                <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                <span>{refreshMessage}</span>
+              </div>
+            )}
+          </div>
           <SimulationControls
             iterations={iterations}
             onIterationsChange={setIterations}
@@ -441,13 +476,13 @@ export default function App() {
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
               <div className="flex items-center justify-between font-bold text-xs">
-                <span>API 서버 헬스체크</span>
+                <span>정적 JSON 파일 로드</span>
                 <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
                   {diagnostic.health === 'ok' ? 'OK' : diagnostic.health === 'fail' ? 'FAIL' : 'CHECKING'}
                 </span>
               </div>
               <strong className="text-[11px] font-semibold text-slate-700 mt-1">
-                {diagnostic.health === 'ok' ? '✓ 서버 가동 중 (OK)' : diagnostic.health === 'fail' ? '✗ 서버 오류 (FAIL)' : diagnostic.health === 'checking' ? '조회중...' : '대기'}
+                {diagnostic.health === 'ok' ? '✓ 파일 로드 완료 (OK)' : diagnostic.health === 'fail' ? '✗ 파일 로드 실패 (FAIL)' : diagnostic.health === 'checking' ? '조회중...' : '대기'}
               </strong>
             </div>
 
@@ -455,28 +490,24 @@ export default function App() {
             <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
               diagnostic.standings === 'checking' ? 'bg-amber-50 border-amber-200 text-amber-800 animate-pulse' :
               diagnostic.standings === 'fail' ? 'bg-rose-50 border-rose-200 text-rose-800' :
-              (diagnostic.standings.startsWith('official-') || diagnostic.standings === 'cache' || diagnostic.standings === 'official-kbo') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-              diagnostic.standings === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-800' :
-              diagnostic.standings !== 'idle' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+              diagnostic.standings === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
               <div className="flex items-center justify-between font-bold text-xs">
-                <span>순위 데이터 수집</span>
+                <span>10개 팀 순위 정합성</span>
                 <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
-                  {diagnostic.standings === 'checking' ? '검사중' :
-                   (diagnostic.standings.startsWith('official-') || diagnostic.standings === 'cache' || diagnostic.standings === 'official-kbo') ? 'OK' :
-                   diagnostic.standings === 'fail' ? 'FAIL' : 'WARNING'}
+                  {diagnostic.standings === 'checking' ? '검사중' : diagnostic.standings === 'ok' ? 'OK' : 'FAIL'}
                 </span>
               </div>
               <div className="text-[11px] font-semibold text-slate-700 mt-1">
-                {diagnostic.standings === 'checking' ? '데이터 로딩중...' :
-                 diagnostic.standings === 'fail' ? '✗ 수집 실패 (FAIL)' :
+                {diagnostic.standings === 'checking' ? '데이터 검사중...' :
+                 diagnostic.standings === 'fail' ? '✗ 검증 실패 (FAIL)' :
                  diagnostic.standings === 'idle' ? '대기' :
-                 `✓ ${standingsSourceInfo?.sourceLabel || diagnostic.standings}`}
+                 `✓ 10개 구단 확인 (OK)`}
               </div>
               {standingsSourceInfo?.failedSources && standingsSourceInfo.failedSources.length > 0 && (
                 <div className="text-[9px] text-slate-500 border-t border-dashed border-black/10 pt-1.5 mt-1 font-mono leading-normal max-h-16 overflow-y-auto">
-                  <div className="font-bold text-slate-600">실패한 소스 목록:</div>
+                  <div className="font-bold text-slate-600">수집 시 실패 로그:</div>
                   {standingsSourceInfo.failedSources.map((f, i) => (
                     <div key={i} className="truncate" title={`${f.source}: ${f.reason}`}>
                       • {f.source}: {f.reason}
@@ -490,28 +521,24 @@ export default function App() {
             <div className={`p-3 rounded-lg border flex flex-col gap-1.5 transition-all ${
               diagnostic.schedule === 'checking' ? 'bg-amber-50 border-amber-200 text-amber-800 animate-pulse' :
               diagnostic.schedule === 'fail' ? 'bg-rose-50 border-rose-200 text-rose-800' :
-              (diagnostic.schedule.startsWith('official-') || diagnostic.schedule === 'cache' || diagnostic.schedule === 'official-kbo') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-              diagnostic.schedule === 'bundled-fallback' ? 'bg-orange-50 border-orange-200 text-orange-800' :
-              diagnostic.schedule !== 'idle' ? 'bg-amber-50 border-amber-200 text-amber-800' :
+              diagnostic.schedule === 'ok' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
               <div className="flex items-center justify-between font-bold text-xs">
-                <span>일정 데이터 수집</span>
+                <span>남은 경기 데이터 존재</span>
                 <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
-                  {diagnostic.schedule === 'checking' ? '검사중' :
-                   (diagnostic.schedule.startsWith('official-') || diagnostic.schedule === 'cache' || diagnostic.schedule === 'official-kbo') ? 'OK' :
-                   diagnostic.schedule === 'fail' ? 'FAIL' : 'WARNING'}
+                  {diagnostic.schedule === 'checking' ? '검사중' : diagnostic.schedule === 'ok' ? 'OK' : 'FAIL'}
                 </span>
               </div>
               <div className="text-[11px] font-semibold text-slate-700 mt-1">
-                {diagnostic.schedule === 'checking' ? '데이터 로딩중...' :
-                 diagnostic.schedule === 'fail' ? '✗ 수집 실패 (FAIL)' :
+                {diagnostic.schedule === 'checking' ? '데이터 검사중...' :
+                 diagnostic.schedule === 'fail' ? '✗ 검증 실패 (FAIL)' :
                  diagnostic.schedule === 'idle' ? '대기' :
-                 `✓ ${scheduleSourceInfo?.sourceLabel || diagnostic.schedule}`}
+                 `✓ 예정 경기 발견 완료 (OK)`}
               </div>
               {scheduleSourceInfo?.failedSources && scheduleSourceInfo.failedSources.length > 0 && (
                 <div className="text-[9px] text-slate-500 border-t border-dashed border-black/10 pt-1.5 mt-1 font-mono leading-normal max-h-16 overflow-y-auto">
-                  <div className="font-bold text-slate-600">실패한 소스 목록:</div>
+                  <div className="font-bold text-slate-600">수집 시 실패 로그:</div>
                   {scheduleSourceInfo.failedSources.map((f, i) => (
                     <div key={i} className="truncate" title={`${f.source}: ${f.reason}`}>
                       • {f.source}: {f.reason}
@@ -529,13 +556,13 @@ export default function App() {
               'bg-slate-50 border-slate-200 text-slate-400'
             }`}>
               <div className="flex items-center justify-between font-bold text-xs">
-                <span>시뮬레이션 연산</span>
+                <span>시뮬레이션 가동 가능성</span>
                 <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-black/5">
                   {diagnostic.simulate === 'ok' ? 'OK' : diagnostic.simulate === 'fail' ? 'FAIL' : 'RUNNING'}
                 </span>
               </div>
               <strong className="text-[11px] font-semibold text-slate-700 mt-1">
-                {diagnostic.simulate === 'ok' ? '✓ 정상 완료 (OK)' : diagnostic.simulate === 'fail' ? '✗ 연산 오류 (FAIL)' : diagnostic.simulate === 'checking' ? '연산 중...' : '대기'}
+                {diagnostic.simulate === 'ok' ? '✓ 연산 및 계산 정상 완료 (OK)' : diagnostic.simulate === 'fail' ? '✗ 시뮬레이터 차단 (FAIL)' : diagnostic.simulate === 'checking' ? '연산 중...' : '대기'}
               </strong>
             </div>
           </div>

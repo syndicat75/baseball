@@ -1,0 +1,49 @@
+name: Update KBO Postseason Data
+
+on:
+  schedule:
+    # Runs at:
+    # 00:00 UTC (09:00 KST) - Morning standings/schedule refresh
+    # 07:00 UTC (16:00 KST) - Pre-game check
+    # 08:00, 09:00, 10:00, 11:00, 12:00, 13:00, 14:00 UTC (17:00 to 23:00 KST) - Live/Post-game updates
+    - cron: '0 0,7,8,9,10,11,12,13,14 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for committing changes back to repository
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-type: 'node'
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run KBO Data Collection
+        run: npm run update:kbo-data
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Check if there are any changes under public/data/
+          if git status --porcelain | grep -q "public/data/"; then
+            git add public/data/
+            git commit -m "chore: auto-update KBO standings and schedules [skip ci]"
+            git push origin HEAD:${{ github.ref }}
+          else
+            echo "No data changes detected. Skipping commit."
+          fi
