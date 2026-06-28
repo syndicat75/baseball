@@ -65,7 +65,7 @@ export const TeamDetailPanel: React.FC<TeamDetailPanelProps> = ({
             <p className="text-xs text-slate-400 font-semibold flex items-center gap-1.5 mt-0.5">
               <span>현재 {teamStats.currentRank}위</span>
               <span className="w-1 h-1 rounded-full bg-slate-600" />
-              <span>{teamStats.currentWins}승 {teamStats.currentLosses}패 {teamStats.currentDraws}무 (승률 {teamStats.currentWins / (teamStats.currentWins + teamStats.currentLosses || 1).toFixed(3)})</span>
+              <span>{teamStats.currentWins}승 {teamStats.currentLosses}패 {teamStats.currentDraws}무 (승률 {(teamStats.currentWins / ((teamStats.currentWins + teamStats.currentLosses) || 1)).toFixed(3)})</span>
             </p>
           </div>
         </div>

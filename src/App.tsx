@@ -36,6 +36,8 @@ interface FullSimulationData {
   unresolvedGames: any[];
   source: string;
   sourceLabel?: string;
+  standingsSource?: string;
+  standingsSourceLabel?: string;
   scheduleSource?: string;
   scheduleSourceLabel?: string;
   originalSource?: string;
@@ -137,7 +139,18 @@ export default function App() {
     try {
       // 1. KBO 정적 데이터 로드
       const staticResult = await loadKboStaticData(selectedDate);
-      const { data, source, sourceLabel, isFallback, warnings, fetchedAt } = staticResult;
+      const { 
+        data, 
+        source, 
+        sourceLabel, 
+        standingsSource, 
+        standingsSourceLabel, 
+        scheduleSource, 
+        scheduleSourceLabel, 
+        isFallback, 
+        warnings, 
+        fetchedAt 
+      } = staticResult;
 
       // 2. 브라우저 사이드 몬테카를로 시뮬레이션 엔진 가동
       console.log(`[App] Running browser-side Monte Carlo simulation: ${iterations} iterations, Model: ${selectedModel}`);
@@ -176,6 +189,10 @@ export default function App() {
         unresolvedGames: data.remainingGames.filter((g: any) => g.status === 'scheduled'),
         source,
         sourceLabel,
+        standingsSource,
+        standingsSourceLabel,
+        scheduleSource,
+        scheduleSourceLabel,
         fetchedAt,
         warnings: [
           ...(warnings || []),
@@ -233,14 +250,14 @@ export default function App() {
       }
 
       setStandingsSourceInfo({
-        source,
-        sourceLabel,
+        source: standingsSource,
+        sourceLabel: standingsSourceLabel,
         failedSources: data.failedSources,
       });
 
       setScheduleSourceInfo({
-        source,
-        sourceLabel,
+        source: scheduleSource,
+        sourceLabel: scheduleSourceLabel,
         failedSources: data.failedSources,
       });
 
@@ -882,7 +899,7 @@ export default function App() {
                 })()}
                 activeScenario={activeScenario}
                 onApplyScenario={(scen) => setActiveScenario(scen)}
-                onResetScenario={() => setActiveScenario(null)}
+                onClearScenario={() => setActiveScenario(null)}
               />
             </section>
 
@@ -952,13 +969,11 @@ export default function App() {
               <FifthPlaceCutoffCard
                 cutoff={simData.cutoffSummary || {
                   averageFifthPlaceWins: 72,
-                  averageFifthPlaceWinRate: 0.500,
-                  winPercentiles: {
-                    percentile25: 71,
-                    percentile50: 72,
-                    percentile75: 73
-                  },
-                  teamChancesAtWins: []
+                  p25FifthPlaceWins: 70,
+                  p50FifthPlaceWins: 72,
+                  p75FifthPlaceWins: 74,
+                  p90FifthPlaceWins: 76,
+                  averageFifthPlaceWinRate: 0.500
                 }}
               />
 
@@ -995,12 +1010,10 @@ export default function App() {
             {/* Interactive Team Detail Overlay Modal Panel */}
             {selectedTeamForDetail && simData && (
               <TeamDetailPanel
-                teamCode={selectedTeamForDetail}
-                isOpen={!!selectedTeamForDetail}
                 onClose={() => setSelectedTeamForDetail(null)}
                 teamStats={(activeResults || simData.results).find(r => r.team === selectedTeamForDetail)!}
-                targetWinsProbabilities={simData.teamWinTargetProbabilities?.[selectedTeamForDetail] || []}
-                fifthPlaceWins={simData.cutoffSummary?.winPercentiles.percentile50 ?? 72}
+                targetProbs={simData.teamWinTargetProbabilities?.[selectedTeamForDetail] || []}
+                cutoffWins={simData.cutoffSummary?.p50FifthPlaceWins ?? simData.cutoffSummary?.averageFifthPlaceWins ?? 72}
               />
             )}
 

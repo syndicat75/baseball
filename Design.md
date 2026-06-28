@@ -1,99 +1,87 @@
-# KBO 포스트시즌 진출 확률 계산기 - 시스템 설계서 (Design.md)
+# KBO Postseason Probability Calculator - Design Document
 
-본 문서는 **KBO 프로야구 가을야구 진출 확률 계산기** 웹 애플리케이션의 핵심 아키텍처, 몬테카를로 시뮬레이션 기법, 데이터 무결성 검증, 시나리오 분석 엔진 및 모듈 분리 구조를 상세히 기술합니다.
-
----
-
-## 1. 개요 및 시스템 목적 (System Goal)
-
-정규시즌 총 144경기 완주를 목표로 하는 KBO 리그에서, 현재 시점의 순위표(Standings) 데이터와 잔여 일정표(Remaining Schedule) 데이터를 결합하여 **최종 5위 이내 진입(와일드카드 및 포스트시즌 진출) 확률**을 정밀 통계 모델링으로 예측합니다.
-특히 데이터 불일치 자동 진정, 실시간 품질 자가진단, 유저가 특정 경기의 승무패 결과를 직접 고정하는 가상 시나리오 분석 기능을 결합하여 고도의 대화형 야구 분석 도구를 선사합니다.
+This document outlines the overall software architecture, core components, data pipelines, simulation models, and robust error-handling/normalization strategies implemented in the **KBO 가을야구 진출 확률 계산기 (KBO Postseason Probability Calculator)**.
 
 ---
 
-## 2. 핵심 아키텍처 및 폴더 구조 (System Architecture)
+## 1. System Architecture Overview
 
-애플리케이션은 코드 분할 및 단일 책임 원칙(Single Responsibility)을 준수하며 다음과 같이 모듈화되어 설계되었습니다.
+The system is designed as a **Full-Stack, Static-First Client-Side Web Application**. The core calculations are computed in the user's browser using a highly optimized Monte Carlo simulation, while the data is gathered, parsed, and normalized on a schedule via a scheduled background harvester script (`update-kbo-data.ts`).
 
-```text
-/src
-├── components/                      # UI 뷰 및 가시화 위젯 레이어
-│   ├── DateControl.tsx              # 기준 날짜 선택 및 데이터 수집 수동 트리거
-│   ├── SimulationControls.tsx       # 연산 회수(Iterations) 및 통계 모델 선택기
-│   ├── ProbabilityCards.tsx         # 구단별 진출 확률 개요 카드 (Clickable)
-│   ├── ProbabilityTable.tsx         # 구단별 11개 상세 지표 및 인공보정 가시화 스프레드시트 (Clickable)
-│   ├── RankDistribution.tsx         # 구단별 최종 시뮬레이션 순위 히트맵 가로막대
-│   ├── DataQualityNotice.tsx        # 미해결/정체 경기 보정 안내 배너
-│   ├── DataReliabilityCard.tsx      # [추가] 실시간 데이터 품질 분석 보고서 (0~100점)
-│   ├── FifthPlaceCutoffCard.tsx     # [추가] 5위 컷오프(Cutoff) 승수 및 백분위 예측서
-│   ├── TeamDetailPanel.tsx          # [추가] 구단별 목표 승수 달성 연계 진출 확률 차트 모달
-│   ├── ProbabilityChangeCard.tsx    # [추가] 어제자 연산 대비 확률 상승/하락 델타 비교기
-│   └── ScenarioModePanel.tsx        # [추가] 잔여 경기 결과를 고정하는 시나리오 대화형 패널
-│
-├── lib/                             # 통계학 계산 연산 및 전처리 레이어
-│   ├── quality/
-│   │   └── calculateDataReliability.ts # [추가] 감점 알고리즘 기반 데이터 정합성 지표 산출
-│   ├── history/
-│   │   └── simulationHistory.ts     # [추가] 로컬 히스토리 로깅, 캐싱 및 델타 확률 계산
-│   ├── scenario/
-│   │   └── applyScenario.ts         # [추가] 사용자 정의 결과를 순위표에 선반영하는 전처리기
-│   └── simulation/
-│       ├── types.ts                 # 시뮬레이션 타입 규격 정의
-│       ├── simulateSeason.ts        # 핵심 몬테카를로 시즌 루프 계산 (5위 컷 및 타겟 승수 누적)
-│       ├── simulateFromStaticData.ts# JSON 결합 및 일정 검사 엔트리포인트
-│       └── ranking.ts               # KBO 전용 승률 계산 및 다단계 타이브레이커 로직
-│
-├── App.tsx                          # 최상단 오케스트레이터 및 리액트 상태 동기화 관리자
-├── types.ts                         # 전역 타입 정의 (FullSimulationData 등)
-└── config.ts                        # 구단별 브랜드 컬러, 한글 표기명, 이미지 로고 대체 문자열
+```
++------------------ Scheduled Background (GitHub Actions) -------------------+
+|                                                                            |
+|  [Official KBO Website]     [MyKBOStats (Unofficial)]     [AiScore (Aux)]  |
+|           |                            |                         |         |
+|           +----------------------------+-------------------------+         |
+|                                        |                                   |
+|                                        v                                   |
+|                          [Source Manager (sourceManager.ts)]               |
+|                                        |                                   |
+|                                        v                                   |
+|                    [Snapshot Normalizer (normalizeKboSnapshot)]            |
+|                                        | (Reconcile / Align 144G Scale)    |
+|                                        v                                   |
+|                   [Standings-Based Remaining Game Generator]                |
+|                                        |                                   |
+|                                        v                                   |
+|                             [public/data/kbo-latest.json]                  |
++----------------------------------------|-----------------------------------+
+                                         | (HTTP GET Fetch)
+                                         v
++------------------------- Browser Runtime UI Layer -------------------------+
+|                                                                            |
+|                             [loadKboStaticData.ts]                         |
+|                                        |                                   |
+|                                        v                                   |
+|                             [App.tsx (Main Coordinator)]                   |
+|                                        |                                   |
+|         +------------------------------+------------------------------+     |
+|         |                              |                              |     |
+|         v                              v                              v     |
+|  [Scenario Manager]             [Monte Carlo Engine]           [UI components]  |
+|  (preprocessScenarioGames)      (simulateFromStaticData)       (React / Tailwind)|
+|                                                                            |
++----------------------------------------------------------------------------+
 ```
 
 ---
 
-## 3. 5대 핵심 기능 명세 및 세부 수학 공식
+## 2. Core Functional Modules
 
-### ① 실시간 데이터 신뢰도 점수 (Data Reliability Score)
-* **목적**: 현재 사용하는 외부 API/스크래핑 데이터의 신뢰도 지표를 유저에게 0~100점 스케일로 정형화하여 고지합니다.
-* **알고리즘**: `100점 만점`에서 다음 가혹 기준을 감점(Penalty)하는 방식으로 구현되었습니다:
-  1. **순위표-일정표 완료수 차이**: $\Delta = |StandingsCompleted - ScheduleCompleted|$. $\Delta > 0.5$ 이면 $Min(25, \lceil \Delta \times 3 \rceil)$ 점 감점.
-  2. **일정표 등록 경기 누락**: 순위표 기반 요구량 대비 부족분 경기당 $3$점 감점 (최대 $25$점).
-  3. **인공 가상 게임(Synthetic Game) 보정**: 무차별 생성 보정 수당 $1.5$점 감점 (최대 $20$점).
-  4. **날짜 기준일 불일치**: 스냅샷 날짜 불일치 시 $15$점 고정 감점.
-  5. **폴백/번들 데이터셋 사용**: 비실시간 캐시 가동 시 $35$점 감점.
+### A. Data Harvester & Normalizer (`/scripts/update-kbo-data.ts`)
+*   **Purpose**: Runs periodically to scrape the latest KBO team standings and schedule.
+*   **Fallback Mechanism**: If the remote servers are down or unresponsive, it falls back to the previous successful cached file (`kbo-latest.json`) or uses a bundled local asset dataset.
+*   **Snapshot Normalization (`normalizeKboSnapshot`)**: Ensures completed and remaining games match perfectly. If the parsed schedule is inconsistent with the official standings, it invokes the **Standings-Based Remaining Game Generator** to reconstruct unbiased neutral remaining slots for every team up to the 144-game scale.
 
-### ② 예상 5위 커트라인 분석 (Projected 5th Place Cutoff)
-* **목적**: 10개 구단 중 포스트시즌 진입 턱걸이 순위인 **5위 구단의 합격선(승수 및 승률)**을 시뮬레이션으로 수집하고 분위수를 산출합니다.
-* **수학적 계산**:
-  * 몬테카를로 $N$회 루프 도중 각 가상 리그 완료 시 마다 5위 구단의 최종 승수를 누적 배열 $S_{cutoff}$ 에 기록.
-  * 전체 시뮬레이션 완료 후 정렬:
-    * **25% 분위수(보수적 진입 장벽)**: 하위 25% 지점 ($S_{cutoff}[0.25 \times N]$)
-    * **50% 분위수(중립 평균 컷오프)**: 중앙값 ($S_{cutoff}[0.50 \times N]$)
-    * **75% 분위수(완전 안전 장벽)**: 상위 25% 지점 ($S_{cutoff}[0.75 \times N]$)
+### B. Neutral Remaining Game Generator (`/src/lib/simulation/generateRemainingGamesFromStandings.ts`)
+*   **Purpose**: Dynamically maps each team's remaining game slots ($144 - \text{playedGames}$) and uses a greedy matching algorithm to balance pairings, ensuring no bias toward any team, resulting in a perfect 144-game projection for every simulated path.
 
-### ③ 구단별 타겟 승수 연계 진출 확률 (Target Wins Probability Map)
-* **목적**: 사용자가 클릭한 구단이 최종 몇 승을 기록할 때 가을야구에 도달하는지 그 성공 경계를 제공합니다.
-* **수학적 계산**:
-  * 각 시뮬레이션 루프에서 구단 $T$의 최종 승수 $W$와 포스트시즌 진출 여부 $P_{pass}$(최종 순위 5위 이내)를 다차원 분산 기록.
-  * $P(Playoff | Team=T, FinalWins=W) = \frac{\sum P_{pass}(T \text{ at } W)}{\text{Count}(T \text{ at } W)}$ 계산을 거쳐 각 승수 스텝별 진출 확률을 도출 및 히스토그램 차트화.
-
-### ④ 어제 대비 확률 변화 추적 (Yesterday vs. Today Deltas)
-* **목적**: 당일 계산된 확률과 어제(`Date - 1`) 계산되어 브라우저 로컬 저장소(`localStorage`)에 보존된 계산본의 진출 확률을 구단별로 1:1 비교하여 상승/하락치($\Delta \%p$)를 산출합니다.
-* **데이터 흐름**:
-  * 시뮬레이션 성공 시 `saveSimulationResult(date, result)` 호출로 브라우저 반영구 보존.
-  * 기점 날짜 `Date` 기준 하루 전 스냅샷이 존재할 경우 `calculateProbabilityChanges`를 거쳐 UI 카드에 배치.
-
-### ⑤ 대화형 몬테카를로 시나리오 모드 (Scenario Simulator)
-* **목적**: 야구 팬들이 직접 "만약 우리 팀이 이번 남은 6경기에서 4승 2패를 기록한다면 진출 확률이 어떻게 바뀔까?"를 검증하는 대형 대화형 도구입니다.
-* **전처리 알고리즘**:
-  * 사용자가 지정한 구단 $T$, 지정 가상 경기 수 $G_{scen}$, 목표 승수 $W_{scen}$ 입력.
-  * 전체 일정에서 구단 $T$가 포함된 미완료 경기 중 시간순으로 다음 $G_{scen}$ 경기를 찾아냄.
-  * 가상 경기에 대해 무작위 난수 생성을 건너뛰고, 사용자가 약속한 $W_{scen}$개의 승리와 그 외의 패배/무승부 결과를 순위표에 강제로 선반영하여 고정.
-  * 변경된 상태를 기초 Standings로 선조정 완료한 뒤, 나머지 잔여 경기에 대해서만 몬테카를로 엔진을 구동하여 비교 차트를 제공합니다.
+### C. Browser Monte Carlo Engine (`/src/lib/simulation/simulateFromStaticData.ts`)
+*   **Purpose**: Performs 10,000 to 100,000 season iterations inside a browser-safe, non-blocking asynchronous environment.
+*   **Probability Models**: Supports multiple prediction weight models (Basic Equal Chance, Cumulative Current Win Rate, and Hybrid Multi-Dimensional).
+*   **Scenario Mode Preprocessing (`/src/lib/scenario/applyScenario.ts`)**: Allows users to freeze a specific team's next $N$ games to a fixed record (e.g., 5 Wins, 3 Losses) and runs comparative simulations to display probability delta changes.
 
 ---
 
-## 4. 완벽한 함수 내 로깅 및 신뢰 기준 (Robust Operations)
+## 3. Visual & Component Hierarchy
 
-- **로그 일원화**: 모든 라이브러리 함수와 컴포넌트 렌더러는 호출 인자값과 동작 성패 여부를 디버그 환경에서 쉽게 파악할 수 있도록 접두어 `[simulateSeason]`, `[applyScenario]`, `[DataReliabilityCard]` 등과 함께 상세 콘솔 로그를 남깁니다.
-- **예외 복구성**: 네트워크 장애 발생 및 KBO 날짜 정보 파싱 실패가 감지되더라도, 사전에 준비된 `bundled-fallback` 데이터셋과 수학적 보정 엔진을 통해 사이트 구동 및 연산 핵심 기법이 절대 정지되지 않도록 이중 구조를 채택했습니다.
-- **수학적 불변조건 통과**: 5대 핵심 테스트 슈트(`runAllSimulationTests`)를 브라우저 실행 단계에서 자동 구동하여 모든 정규시즌 10개 구단의 총 합산 경기수(144경기)가 완벽히 고정 보존되고 있는지를 매 루프마다 자체 보증합니다.
+The UI is built with desktop-first precision using **React 19**, styled with custom **Tailwind CSS**, and features smooth visual micro-interactions using **motion/react**:
+
+1.  **Header Indicator Area**: Displays the current calculation parameters, selected model, seed, and real-time execution statistics.
+2.  **Advanced Analytics Grid (Bento Boxes)**:
+    *   **Data Reliability Card (`DataReliabilityCard.tsx`)**: Displays a percentage confidence index based on data source freshness and schedule-to-standings integrity.
+    *   **5th Place Cutoff Card (`FifthPlaceCutoffCard.tsx`)**: Displays percentile scenarios (25%, 50%, 75%, 90%) for the wins required to secure 5th place.
+    *   **Probability Delta Card (`ProbabilityChangeCard.tsx`)**: Reflects daily changes comparing the active snapshot with the previous day's results.
+3.  **Scenario Mode Controller (`ScenarioModePanel.tsx`)**: Interactive interface to construct hypothetical records and analyze post-scenario chances.
+4.  **Team Probability Matrix (`ProbabilityCards.tsx` / `ProbabilityTable.tsx`)**: Renders team logos, current stats, remaining game counts, and postseason probability bars. Clicking a team opens the **Team Detail Panel Overlay**.
+5.  **Team Detail Overlay Panel (`TeamDetailPanel.tsx`)**: Shows the team's rank distribution heatmap, remaining matchups, target win probabilities, and postseason likelihood at specific win targets.
+6.  **Historical Rank Heatmap (`RankDistribution.tsx`)**: A fully realized color-coded matrix displaying the probability of every team finishing in positions 1st through 10th.
+
+---
+
+## 4. Key Design and Code Quality Standards
+
+*   **Type Safety**: Every shared interface, enum, and class payload is defined in `/src/types.ts` to ensure strict contract mapping.
+*   **Lazy Initialization & Fault-Tolerance**: All web scraper selectors are wrapped in try-catch structures, and division operations are guarded against division-by-zero errors.
+*   **Exhaustive Telemetry Logs**: Function executions, database state modifications, and user interactive actions are comprehensively logged to the console to enable easy debugging.

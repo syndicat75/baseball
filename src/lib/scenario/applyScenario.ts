@@ -60,10 +60,13 @@ export function preprocessScenarioGames(
 
   // 선택된 첫 N경기 추출
   const selectedGamesToFreeze = teamGames.slice(0, targetTotal);
-  const selectedGameIds = new Set(selectedGamesToFreeze.map(g => `${g.date}_${g.away}_${g.home}`));
+  
+  const getGameKey = (g: KBOGame) => `${g.date}_${g.time}_${g.away}_${g.home}_${g.stadium || ''}`;
+  
+  const selectedGameIds = new Set(selectedGamesToFreeze.map(getGameKey));
 
   // 남은 무작위 게임들
-  const remainingRandomGames = remainingGames.filter(g => !selectedGameIds.has(`${g.date}_${g.away}_${g.home}`));
+  const remainingRandomGames = remainingGames.filter(g => !selectedGameIds.has(getGameKey(g)));
 
   // 순위표 복제 (조정 적용 예정)
   const adjustedTeamsMap: Record<string, StandingsTeam> = {};

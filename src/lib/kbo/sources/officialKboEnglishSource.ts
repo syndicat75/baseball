@@ -8,7 +8,6 @@ import { KboDataSource, KBOStanding } from './index';
 import { KBOGame } from '../../../types';
 import { fetchWithTimeout } from './fetchWithTimeout';
 import { CONFIG } from '../../../config';
-import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 
 /**
  * Maps English team names from koreabaseball.com/eng to normalised codes.

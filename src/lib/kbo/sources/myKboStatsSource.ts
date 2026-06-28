@@ -9,7 +9,6 @@ import { KBOGame } from '../../../types';
 import { fetchWithTimeout } from './fetchWithTimeout';
 import { CONFIG } from '../../../config';
 import { normaliseEngTeamCode } from './officialKboEnglishSource';
-import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 
 /**
  * 한국 시간(KST) 기준 YYYY-MM-DD 날짜 문자열 반환

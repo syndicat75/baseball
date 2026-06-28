@@ -11,6 +11,10 @@ export interface LoadKboStaticDataResult {
   data: any;
   source: string;
   sourceLabel: string;
+  standingsSource: string;
+  standingsSourceLabel: string;
+  scheduleSource: string;
+  scheduleSourceLabel: string;
   isFallback: boolean;
   warnings: string[];
   fetchedAt: string | null;
@@ -38,8 +42,12 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
         console.log(`[loadKboStaticData] Successfully loaded date-specific JSON: ${dateUrl}`);
         return {
           data,
-          source: data.primarySource || 'static-json',
+          source: 'static-json',
           sourceLabel: data.sourceLabel || `예약 수집 JSON 데이터 (${targetDate})`,
+          standingsSource: data.standingsSource || data.primarySource || 'static-json',
+          standingsSourceLabel: data.standingsSourceLabel || data.sourceLabel || '예약 수집 순위 데이터',
+          scheduleSource: data.scheduleSource || 'generated-from-standings',
+          scheduleSourceLabel: data.scheduleSourceLabel || '순위표 기준 144경기 보정 일정',
           isFallback: false,
           warnings: data.warnings || [],
           fetchedAt: data.fetchedAt || null,
@@ -71,8 +79,12 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
     
     return {
       data,
-      source: data.primarySource || 'static-json',
+      source: 'static-json',
       sourceLabel: data.sourceLabel || '예약 수집 JSON 데이터',
+      standingsSource: data.standingsSource || data.primarySource || 'static-json',
+      standingsSourceLabel: data.standingsSourceLabel || data.sourceLabel || '예약 수집 순위 데이터',
+      scheduleSource: data.scheduleSource || 'generated-from-standings',
+      scheduleSourceLabel: data.scheduleSourceLabel || '순위표 기준 144경기 보정 일정',
       isFallback: false,
       warnings: data.warnings || [],
       fetchedAt: data.fetchedAt || null,
@@ -83,6 +95,10 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
       data: fallbackKboData,
       source: 'bundled-fallback',
       sourceLabel: '내장 fallback 데이터',
+      standingsSource: 'bundled-fallback',
+      standingsSourceLabel: '번들 로컬 예비 순위표',
+      scheduleSource: 'bundled-fallback',
+      scheduleSourceLabel: '번들 로컬 예비 일정',
       isFallback: true,
       warnings: ['예약 수집 JSON 데이터를 읽지 못해 내장 데이터로 계산합니다.'],
       fetchedAt: fallbackKboData.fetchedAt,
