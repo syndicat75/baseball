@@ -8,6 +8,8 @@
 import { simulateSeason } from './simulateSeason';
 import { KBOGame, KBOStandingsResult, StandingsTeam, SimulationResponse, ProbabilityModelType } from '../../types';
 import { CONFIG } from '../../config';
+import { prepareGames } from './prepareGames';
+import { validateSimulationInvariants } from './validateSimulationInvariants';
 
 /**
  * @function getEstimatedHeadToHead
@@ -67,16 +69,23 @@ export async function simulateFromStaticData(input: SimulateFromStaticDataInput)
   const headToHead = getEstimatedHeadToHead(input.standings);
   
   // Standings 형식 일치시키기
-  const formattedTeams: StandingsTeam[] = input.standings.map((t: any) => ({
-    team: t.team,
-    nameKo: t.displayName || t.nameKo || CONFIG.TEAMS[t.team as keyof typeof CONFIG.TEAMS]?.nameKo || t.team,
-    games: t.games,
-    wins: t.wins,
-    losses: t.losses,
-    draws: t.draws,
-    winRate: t.winRate,
-    rank: t.rank,
-  }));
+  // currentGames는 wins + losses + draws 계산 기준으로 우선 보정
+  const formattedTeams: StandingsTeam[] = input.standings.map((t: any) => {
+    const wins = t.wins ?? 0;
+    const losses = t.losses ?? 0;
+    const draws = t.draws ?? 0;
+    const computedGames = wins + losses + draws;
+    return {
+      team: t.team,
+      nameKo: t.displayName || t.nameKo || CONFIG.TEAMS[t.team as keyof typeof CONFIG.TEAMS]?.nameKo || t.team,
+      games: computedGames, // wins + losses + draws를 우선 적용
+      wins,
+      losses,
+      draws,
+      winRate: t.winRate || (wins / (wins + losses || 1)),
+      rank: t.rank || 1,
+    };
+  });
   
   const standingsResult: KBOStandingsResult = {
     asOfDate: input.asOfDate,
@@ -85,14 +94,16 @@ export async function simulateFromStaticData(input: SimulateFromStaticDataInput)
     headToHead,
   };
   
-  const allGames = [...(input.completedGames || []), ...input.remainingGames];
-  const unresolvedGames = input.remainingGames.filter((g: KBOGame) => g.status === 'scheduled');
+  // 중복 제거 및 가상 보정 경기 생성 처리
+  const prepResult = prepareGames(formattedTeams, input.remainingGames || []);
+  const consolidatedRemainingGames = [...prepResult.cleanedRemainingGames, ...prepResult.syntheticGames];
   
   // 순수 simulateSeason 함수 실행
+  // 시뮬레이션에서는 remainingGames만 처리해야 하므로 가상 경기 포함된 consolidatedRemainingGames만 주입합니다.
   const response = await simulateSeason(
     standingsResult,
-    allGames,
-    unresolvedGames,
+    consolidatedRemainingGames,
+    [],
     {
       date: input.asOfDate,
       iterations: input.iterations,
@@ -101,6 +112,19 @@ export async function simulateFromStaticData(input: SimulateFromStaticDataInput)
     }
   );
   
-  console.log('[simulateFromStaticData] Monte Carlo simulation has run successfully inside client browser.');
+  // 시뮬레이션 불변조건 수학적 검증 수행
+  const validationResult = validateSimulationInvariants(formattedTeams, consolidatedRemainingGames, response.results);
+  
+  // 검증 결과 및 중복 제거 로그 취합
+  const combinedWarnings = [
+    ...(prepResult.warnings || []),
+    ...(validationResult.errors || [])
+  ];
+  
+  response.warnings = combinedWarnings;
+  response.syntheticGamesCount = prepResult.syntheticGames.length;
+  response.syntheticTeamCounts = prepResult.syntheticTeamCounts;
+  
+  console.log('[simulateFromStaticData] Monte Carlo simulation and invariant validation completed successfully inside client browser.');
   return response;
 }

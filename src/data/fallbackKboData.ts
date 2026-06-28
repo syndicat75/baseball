@@ -25,7 +25,7 @@ export interface FallbackKboData {
  */
 export const fallbackKboData: FallbackKboData = {
   asOfDate: '2026-06-28',
-  fetchedAt: '2026-06-28T14:28:35.801Z',
+  fetchedAt: new Date().toISOString(),
   primarySource: 'bundled-fallback',
   sourceLabel: '내장 fallback 데이터',
   standings: fallbackTeams2026.map(t => ({

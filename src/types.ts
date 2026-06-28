@@ -14,14 +14,44 @@ export interface SimulationOptions {
 
 export interface TeamSimulationStats {
   team: string;               // E.g. "LG"
+  displayName: string;        // Ko name, e.g. "LG 트윈스"
   playoffProbability: number; // Percentage (0-100) of entering top 5
   averageFinalRank: number;   // Average sorted rank (1-10)
+  mostLikelyFinalRank: number; // Rank with highest frequency in distribution
   rankDistribution: Record<number, number>; // Percentage of times team finished in rank 1..10
   averageFinalWins: number;   // Average wins at end of season
+  averageFinalLosses: number; // Average final losses
+  averageFinalDraws: number;  // Average final draws
+  averageFinalGames: number;  // Average final games simulated (should be 144)
+  expectedAdditionalWins: number; // Expected additional wins (averageFinalWins - currentWins)
   currentRank: number;        // Active rank at snapshot date
   currentWins: number;        // Wins at snapshot date
   currentLosses: number;      // Losses at snapshot date
   currentDraws: number;       // Draws at snapshot date
+  currentGames: number;       // currentWins + currentLosses + currentDraws
+  actualScheduledRemainingGames: number; // Actual remaining games unresolved/scheduled
+  syntheticRemainingGames: number;       // Synthetic compensation games
+  totalRemainingGamesUsed: number;       // actual + synthetic
+  projectedFinalGames: number;           // currentGames + totalRemainingUsed (must be 144)
+  cutoffGap: number;                     // averageFinalWins - averageFifthPlaceWins
+}
+
+export interface CutoffSummary {
+  averageFifthPlaceWins: number;
+  p25FifthPlaceWins: number;
+  p50FifthPlaceWins: number;
+  p75FifthPlaceWins: number;
+  p90FifthPlaceWins: number;
+  averageFifthPlaceWinRate: number;
+}
+
+export interface ProbabilityChangeItem {
+  team: string;
+  displayName: string;
+  currentProb: number;
+  prevProb: number;
+  change: number;
+  direction: 'up' | 'down' | 'same';
 }
 
 export interface SimulationResponse {
@@ -33,6 +63,24 @@ export interface SimulationResponse {
   source?: string;
   errorType?: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용';
   errorMessage?: string;
+  warnings?: string[];
+  syntheticGamesCount?: number;
+  syntheticTeamCounts?: Record<string, number>;
+  dataQuality?: {
+    standingsCompletedGames: number;
+    scheduleCompletedGames: number;
+    scheduleRemainingGames: number;
+    expectedRemainingGamesByStandings: number;
+    syntheticGameCount: number;
+    isScheduleConsistentWithStandings: boolean;
+  };
+  cutoffSummary?: CutoffSummary;
+  probabilityChanges?: {
+    hasPrevData: boolean;
+    prevDate?: string;
+    items: ProbabilityChangeItem[];
+  };
+  teamWinTargetProbabilities?: Record<string, Array<{ wins: number; playoffProbability: number }>>;
 }
 
 export interface KBOGame {

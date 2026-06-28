@@ -10,6 +10,7 @@ import { TrendingUp, Award, Zap, AlertCircle } from 'lucide-react';
 
 interface ProbabilityCardsProps {
   results: TeamSimulationStats[];
+  onTeamClick?: (teamCode: string) => void;
 }
 
 /**
@@ -56,7 +57,7 @@ export function getProbabilityZone(prob: number): {
 /**
  * Grid of beautifully styled cards representing each of the 10 KBO teams.
  */
-export const ProbabilityCards: React.FC<ProbabilityCardsProps> = ({ results }) => {
+export const ProbabilityCards: React.FC<ProbabilityCardsProps> = ({ results, onTeamClick }) => {
   console.log(`[ProbabilityCards] Rendered with ${results.length} team results`);
 
   return (
@@ -72,7 +73,8 @@ export const ProbabilityCards: React.FC<ProbabilityCardsProps> = ({ results }) =
         return (
           <div
             key={r.team}
-            className="bg-white border border-slate-100 rounded-xl p-5 relative overflow-hidden shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-md flex flex-col justify-between"
+            onClick={() => onTeamClick?.(r.team)}
+            className="bg-white border border-slate-100 rounded-xl p-5 relative overflow-hidden shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-md hover:border-slate-350 cursor-pointer flex flex-col justify-between"
             id={`prob-card-${r.team}`}
           >
             {/* Visual accent top line representing team brand color */}

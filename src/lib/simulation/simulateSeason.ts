@@ -7,6 +7,7 @@
 import { KBOGame, KBOStandingsResult, StandingsTeam, SimulationOptions, TeamSimulationStats, SimulationResponse } from '../../types';
 import { calculateLeagueDrawRate, calculateMatchProbabilities, MatchProbabilities } from './probabilityModel';
 import { resolveFinalStandings } from './ranking';
+import { CONFIG } from '../../config';
 
 /**
  * Deterministic Linear Congruential Generator (LCG) for reproducible simulation runs.
@@ -88,19 +89,44 @@ export async function simulateSeason(
   // 4. Initialize simulation counters for each team
   const teams = standings.teams.map(t => t.team);
   const totalWins: Record<string, number> = {};
+  const totalLosses: Record<string, number> = {};
+  const totalDraws: Record<string, number> = {};
   const totalPlayoffScores: Record<string, number> = {};
   const totalRanks: Record<string, number> = {};
   const rankDistributions: Record<string, Record<number, number>> = {};
+  const finalWinsPlayoffCounts: Record<string, Record<number, { total: number; playoff: number }>> = {};
 
   teams.forEach(team => {
     totalWins[team] = 0;
+    totalLosses[team] = 0;
+    totalDraws[team] = 0;
     totalPlayoffScores[team] = 0;
     totalRanks[team] = 0;
     rankDistributions[team] = {};
+    finalWinsPlayoffCounts[team] = {};
     for (let r = 1; r <= 10; r++) {
       rankDistributions[team][r] = 0;
     }
   });
+
+  const teamGameCounts: Record<string, { actual: number; synthetic: number }> = {};
+  teams.forEach(t => {
+    teamGameCounts[t] = { actual: 0, synthetic: 0 };
+  });
+  gamesToSimulate.forEach(g => {
+    const isSynthetic = g.synthetic === true;
+    if (teamGameCounts[g.away] !== undefined) {
+      if (isSynthetic) teamGameCounts[g.away].synthetic++;
+      else teamGameCounts[g.away].actual++;
+    }
+    if (teamGameCounts[g.home] !== undefined) {
+      if (isSynthetic) teamGameCounts[g.home].synthetic++;
+      else teamGameCounts[g.home].actual++;
+    }
+  });
+
+  const fifthPlaceWinsSamples: number[] = [];
+  const fifthPlaceWinRateSamples: number[] = [];
 
   // 5. Run Monte Carlo Loop
   // We allocate arrays outside the loop to reduce GC pressure
@@ -151,27 +177,110 @@ export async function simulateSeason(
     // Resolve rankings for this iteration
     const standingsResolved = resolveFinalStandings(tempRecords);
 
+    // Track 5th place in sorted records
+    const sortedTempRecords = [...tempRecords].map(tr => {
+      const denom = tr.wins + tr.losses;
+      const winRate = denom > 0 ? tr.wins / denom : 0;
+      return { team: tr.team, wins: tr.wins, winRate };
+    }).sort((a, b) => {
+      if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+      return b.wins - a.wins;
+    });
+
+    const fifthWins = sortedTempRecords[4].wins;
+    const fifthWinRate = sortedTempRecords[4].winRate;
+    fifthPlaceWinsSamples.push(fifthWins);
+    fifthPlaceWinRateSamples.push(fifthWinRate);
+
     // Accumulate stats
     for (let i = 0; i < tempRecords.length; i++) {
       const team = tempRecords[i].team;
       const resolved = standingsResolved[team];
+      const winsSim = tempRecords[i].wins;
 
-      totalWins[team] += tempRecords[i].wins;
+      totalWins[team] += winsSim;
+      totalLosses[team] += tempRecords[i].losses;
+      totalDraws[team] += tempRecords[i].draws;
       totalPlayoffScores[team] += resolved.playoffScore;
       totalRanks[team] += resolved.averageRankVal;
       rankDistributions[team][resolved.rank] += 1;
+
+      if (!finalWinsPlayoffCounts[team][winsSim]) {
+        finalWinsPlayoffCounts[team][winsSim] = { total: 0, playoff: 0 };
+      }
+      finalWinsPlayoffCounts[team][winsSim].total += 1;
+      finalWinsPlayoffCounts[team][winsSim].playoff += resolved.playoffScore;
     }
   }
 
   const durationMs = Date.now() - startTime;
   console.log(`[simulateSeason] Monte Carlo simulation complete! Duration: ${durationMs}ms`);
 
+  // Compute Cutoff Summary Percentiles
+  fifthPlaceWinsSamples.sort((a, b) => a - b);
+  const averageFifthPlaceWins = fifthPlaceWinsSamples.reduce((sum, val) => sum + val, 0) / iterations;
+  const p25FifthPlaceWins = fifthPlaceWinsSamples[Math.floor(iterations * 0.25)];
+  const p50FifthPlaceWins = fifthPlaceWinsSamples[Math.floor(iterations * 0.50)];
+  const p75FifthPlaceWins = fifthPlaceWinsSamples[Math.floor(iterations * 0.75)];
+  const p90FifthPlaceWins = fifthPlaceWinsSamples[Math.floor(iterations * 0.90)];
+  const averageFifthPlaceWinRate = fifthPlaceWinRateSamples.reduce((sum, val) => sum + val, 0) / iterations;
+
+  const cutoffSummary = {
+    averageFifthPlaceWins: Math.round(averageFifthPlaceWins * 10) / 10,
+    p25FifthPlaceWins: Math.round(p25FifthPlaceWins),
+    p50FifthPlaceWins: Math.round(p50FifthPlaceWins),
+    p75FifthPlaceWins: Math.round(p75FifthPlaceWins),
+    p90FifthPlaceWins: Math.round(p90FifthPlaceWins),
+    averageFifthPlaceWinRate: Math.round(averageFifthPlaceWinRate * 1000) / 1000
+  };
+
+  // Compute Target Win Probabilities
+  const teamWinTargetProbabilities: Record<string, Array<{ wins: number; playoffProbability: number }>> = {};
+  standings.teams.forEach(s => {
+    const team = s.team;
+    const targetWins = [70, 72, 74, 76];
+    const avgWins = totalWins[team] / iterations;
+    const overallPlayoff = (totalPlayoffScores[team] / iterations) * 100;
+    
+    const probs = targetWins.map(w => {
+      const stats = finalWinsPlayoffCounts[team][w];
+      if (stats && stats.total >= 5) {
+        return { wins: w, playoffProbability: Math.round((stats.playoff / stats.total) * 1000) / 10 };
+      } else {
+        // smoothing local window
+        let winCount = 0;
+        let playoffCount = 0;
+        for (let offset = -1; offset <= 1; offset++) {
+          const s2 = finalWinsPlayoffCounts[team][w + offset];
+          if (s2) {
+            winCount += s2.total;
+            playoffCount += s2.playoff;
+          }
+        }
+        if (winCount >= 5) {
+          return { wins: w, playoffProbability: Math.round((playoffCount / winCount) * 1000) / 10 };
+        }
+        // extrapolation
+        if (w < avgWins - 4) return { wins: w, playoffProbability: 0 };
+        if (w > avgWins + 4) return { wins: w, playoffProbability: 100 };
+        return { wins: w, playoffProbability: Math.round(overallPlayoff * 10) / 10 };
+      }
+    });
+    teamWinTargetProbabilities[team] = probs;
+  });
+
   // 6. Format team statistics
   const results: TeamSimulationStats[] = standings.teams.map(s => {
     const team = s.team;
+    const teamConf = CONFIG.TEAMS[team as keyof typeof CONFIG.TEAMS];
+    const displayName = teamConf?.nameKo || team;
     
-    // Average ranks & wins
+    // Average ranks & wins/losses/draws
     const averageFinalWins = Math.round((totalWins[team] / iterations) * 10) / 10;
+    const averageFinalLosses = Math.round((totalLosses[team] / iterations) * 10) / 10;
+    const averageFinalDraws = Math.round((totalDraws[team] / iterations) * 10) / 10;
+    
+    const expectedAdditionalWins = Math.max(0, Math.round((averageFinalWins - s.wins) * 10) / 10);
     const averageFinalRank = Math.round((totalRanks[team] / iterations) * 10) / 10;
     const playoffProbability = Math.round((totalPlayoffScores[team] / iterations) * 1000) / 10; // e.g. 52.3%
 
@@ -182,16 +291,47 @@ export async function simulateSeason(
       rankDist[r] = Math.round((count / iterations) * 1000) / 10; // e.g. 15.4%
     }
 
+    let mostLikelyFinalRank = 1;
+    let maxProb = -1;
+    for (let r = 1; r <= 10; r++) {
+      if (rankDist[r] > maxProb) {
+        maxProb = rankDist[r];
+        mostLikelyFinalRank = r;
+      }
+    }
+
+    const currentGames = s.wins + s.losses + s.draws;
+    const counts = teamGameCounts[team] || { actual: 0, synthetic: 0 };
+    const actualScheduledRemainingGames = counts.actual;
+    const syntheticRemainingGames = counts.synthetic;
+    const totalRemainingGamesUsed = actualScheduledRemainingGames + syntheticRemainingGames;
+    const projectedFinalGames = currentGames + totalRemainingGamesUsed;
+    const averageFinalGames = Math.round((averageFinalWins + averageFinalLosses + averageFinalDraws) * 10) / 10;
+
+    const cutoffGap = Math.round((averageFinalWins - averageFifthPlaceWins) * 10) / 10;
+
     return {
       team,
+      displayName,
       playoffProbability,
       averageFinalRank,
+      mostLikelyFinalRank,
       rankDistribution: rankDist,
       averageFinalWins,
+      averageFinalLosses,
+      averageFinalDraws,
+      averageFinalGames,
+      expectedAdditionalWins,
       currentRank: s.rank,
       currentWins: s.wins,
       currentLosses: s.losses,
       currentDraws: s.draws,
+      currentGames,
+      actualScheduledRemainingGames,
+      syntheticRemainingGames,
+      totalRemainingGamesUsed,
+      projectedFinalGames,
+      cutoffGap,
     };
   });
 
@@ -203,5 +343,7 @@ export async function simulateSeason(
     iterations,
     model,
     results,
+    cutoffSummary,
+    teamWinTargetProbabilities,
   };
 }

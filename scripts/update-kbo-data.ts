@@ -113,36 +113,92 @@ async function runHarvester() {
 
   // 만약 수집이 정상 완료되었거나, 실패했으나 기존 kbo-latest.json이 없는 경우 신규 데이터셋 생성
   if (!finalData) {
-    const finalSource = standingsResult?.source || 'bundled-fallback';
-    const finalLabel = standingsResult?.sourceLabel || '번들 로컬 예비 데이터';
-
-    console.log(`[update-kbo-data] 신규 KBO 데이터셋 작성 중. 원본 출처: ${finalSource} (${finalLabel})`);
-
-    const standingsList = (standingsResult?.teams || []).map(t => ({
-      team: t.team,
-      displayName: t.nameKo || CONFIG.TEAMS[t.team]?.nameKo || t.team,
-      games: t.games,
-      wins: t.wins,
-      losses: t.losses,
-      draws: t.draws,
-      winRate: t.winRate,
-      rank: t.rank,
-    }));
+    const standingsList = (standingsResult?.teams || []).map(t => {
+      const wins = t.wins ?? 0;
+      const losses = t.losses ?? 0;
+      const draws = t.draws ?? 0;
+      const games = wins + losses + draws;
+      return {
+        team: t.team,
+        displayName: t.displayName || t.nameKo || CONFIG.TEAMS[t.team as keyof typeof CONFIG.TEAMS]?.nameKo || t.team,
+        games,
+        wins,
+        losses,
+        draws,
+        winRate: t.winRate,
+        rank: t.rank,
+      };
+    });
 
     const allGames: KBOGame[] = scheduleResult?.games || [];
     const completedGames = allGames.filter(g => g.status === 'completed');
     const remainingGames = allGames.filter(g => g.status !== 'completed');
 
+    const standingsCurrentTeamGames = standingsList.reduce((sum, t) => sum + t.games, 0);
+    const standingsCompletedGames = standingsCurrentTeamGames / 2;
+    const scheduleCompletedGames = completedGames.length;
+    const scheduleRemainingGames = remainingGames.length;
+    const expectedRemainingTeamGamesByStandings = standingsList.reduce((sum, t) => sum + Math.max(0, 144 - t.games), 0);
+    const expectedRemainingGamesByStandings = expectedRemainingTeamGamesByStandings / 2;
+
+    const teamRemainingCounts: Record<string, number> = {};
+    standingsList.forEach(t => {
+      teamRemainingCounts[t.team] = 0;
+    });
+    remainingGames.forEach(g => {
+      if (teamRemainingCounts[g.away] !== undefined) teamRemainingCounts[g.away]++;
+      if (teamRemainingCounts[g.home] !== undefined) teamRemainingCounts[g.home]++;
+    });
+
+    let maxDiscrepancy = 0;
+    standingsList.forEach(t => {
+      const expected = Math.max(0, 144 - t.games);
+      const actual = teamRemainingCounts[t.team] || 0;
+      const diff = Math.abs(expected - actual);
+      if (diff > maxDiscrepancy) {
+        maxDiscrepancy = diff;
+      }
+    });
+
+    const isScheduleConsistentWithStandings = 
+      Math.abs(scheduleCompletedGames - standingsCompletedGames) <= 2 && 
+      maxDiscrepancy <= 1;
+
+    let standingsSource = standingsResult?.source || 'bundled-fallback';
+    let standingsSourceLabel = standingsResult?.sourceLabel || '번들 로컬 예비 순위표';
+    let scheduleSource = scheduleResult?.source || 'bundled-fallback';
+    let scheduleSourceLabel = scheduleResult?.sourceLabel || '번들 로컬 예비 일정';
+
+    if (!isScheduleConsistentWithStandings && scheduleSource !== 'bundled-fallback') {
+      scheduleSource = 'fallback-generated';
+      scheduleSourceLabel = '일정 데이터 정합성 불일치로 인한 보정용 일정';
+      warnings.push('순위표 경기수와 일정 경기수가 일치하지 않아 예비 일정 데이터소스를 적용합니다.');
+    }
+
+    console.log(`[update-kbo-data] 신규 KBO 데이터셋 작성 중. 순위 출처: ${standingsSource} (${standingsSourceLabel}), 일정 출처: ${scheduleSource} (${scheduleSourceLabel})`);
+
     finalData = {
       asOfDate: kstToday,
       fetchedAt,
-      primarySource: finalSource,
-      sourceLabel: finalLabel,
+      standingsSource,
+      standingsSourceLabel,
+      scheduleSource,
+      scheduleSourceLabel,
+      primarySource: standingsSource,
+      sourceLabel: standingsSourceLabel,
       standings: standingsList,
       remainingGames,
       completedGames,
       failedSources: uniqueFailed,
       warnings: warnings.length > 0 ? warnings : [],
+      dataQuality: {
+        standingsCompletedGames,
+        scheduleCompletedGames,
+        scheduleRemainingGames,
+        expectedRemainingGamesByStandings,
+        syntheticGameCount: 0,
+        isScheduleConsistentWithStandings,
+      }
     };
   }
 

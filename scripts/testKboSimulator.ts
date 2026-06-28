@@ -32,7 +32,7 @@ async function runTests() {
   try {
     const fallback = getFallbackStandings('2026-06-28');
     assert(fallback.teams.length === 10, 'Fallback standings must generate exactly 10 teams');
-    assert(fallback.source === 'fallback-sample', 'Fallback standings must have source fallback-sample');
+    assert(fallback.source === 'bundled-fallback', 'Fallback standings must have source bundled-fallback');
     assert(Object.keys(fallback.headToHead).length === 10, 'Fallback standings must contain 10 teams in head-to-head records');
   } catch (err: any) {
     console.error('Test 1 crashed:', err);

@@ -13,8 +13,8 @@ import { fallbackSchedule2026 } from '../../../data/fallbackSchedule2026';
 /**
  * Maps English team names from koreabaseball.com/eng to normalised codes.
  */
-export function normaliseEngTeamCode(name: string): string {
-  if (!name) return 'KIA';
+export function normaliseEngTeamCode(name: string): string | null {
+  if (!name) return null;
   const n = name.toUpperCase().replace(/[\s\-_]/g, '');
   if (n.includes('KIA') || n.includes('기아') || n.includes('TIGERS')) return 'KIA';
   if (n.includes('SAMSUNG') || n.includes('삼성') || n.includes('LIONS')) return 'SAMSUNG';
@@ -26,7 +26,7 @@ export function normaliseEngTeamCode(name: string): string {
   if (n.includes('LOTTE') || n.includes('롯데') || n.includes('GIANTS')) return 'LOTTE';
   if (n.includes('NC') || n.includes('DINOS')) return 'NC';
   if (n.includes('KIWOOM') || n.includes('키움') || n.includes('HEROES')) return 'KIWOOM';
-  return 'KIA';
+  return null;
 }
 
 /**
@@ -98,96 +98,7 @@ export const officialKboEnglishSource: KboDataSource = {
   },
 
   async getSchedule(): Promise<{ completedGames: KBOGame[]; remainingGames: KBOGame[] }> {
-    const todayKst = getKstDateString();
-    console.log(`[officialKboEnglishSource] [CALL] getSchedule starting partition around: ${todayKst}`);
-
-    // KBO 공식 영어 사이트 일정 페이지에서 오늘 경기 상태를 선택적으로 스크래핑할 수도 있으나,
-    // 전체 시즌 일정을 완벽히 처리하기 위해 마스터 데이터셋을 기준으로 동적 파티셔닝합니다.
-    const url = 'https://eng.koreabaseball.com/Schedule/DailySchedule.aspx';
-    const res = await fetchWithTimeout(url, { timeoutMs: 5000 });
-
-    const todayLiveGames: KBOGame[] = [];
-    if (res.ok && res.data) {
-      try {
-        const $ = cheerio.load(res.data);
-        $('table tbody tr').each((_, elem) => {
-          const tds = $(elem).find('td');
-          if (tds.length >= 5) {
-            const timeStr = $(tds[0]).text().trim();
-            const awayName = $(tds[1]).text().trim();
-            const homeName = $(tds[3]).text().trim();
-            const stadium = $(tds[4]).text().trim() || 'NEUTRAL';
-
-            const awayCode = normaliseEngTeamCode(awayName);
-            const homeCode = normaliseEngTeamCode(homeName);
-
-            const scoreText = $(tds[2]).text().trim();
-            let awayScore: number | null = null;
-            let homeScore: number | null = null;
-            let status: 'completed' | 'scheduled' | 'postponed' = 'scheduled';
-
-            if (scoreText && scoreText.toLowerCase().includes('vs')) {
-              const parts = scoreText.split(/vs/i);
-              const s1 = parseInt(parts[0].trim());
-              const s2 = parseInt(parts[1].trim());
-              if (!isNaN(s1) && !isNaN(s2)) {
-                awayScore = s1;
-                homeScore = s2;
-                status = 'completed';
-              }
-            }
-
-            todayLiveGames.push({
-              date: todayKst,
-              time: timeStr.includes(':') ? timeStr : '18:30',
-              away: awayCode,
-              home: homeCode,
-              awayScore,
-              homeScore,
-              stadium,
-              status,
-            });
-          }
-        });
-      } catch (err) {
-        console.warn(`[officialKboEnglishSource] Failed parsing live daily schedule: ${err}`);
-      }
-    }
-
-    const completedGames: KBOGame[] = [];
-    const remainingGames: KBOGame[] = [];
-
-    for (const game of fallbackSchedule2026) {
-      // 오늘 날짜의 경기라면, 라이브로 긁어온 오늘의 정보가 있을 시 업데이트합니다.
-      if (game.date === todayKst) {
-        const match = todayLiveGames.find(lg => lg.away === game.away && lg.home === game.home);
-        if (match) {
-          if (match.status === 'completed') {
-            completedGames.push(match);
-          } else {
-            remainingGames.push(match);
-          }
-          continue;
-        }
-      }
-
-      if (game.date < todayKst) {
-        completedGames.push({
-          ...game,
-          status: 'completed',
-          awayScore: game.awayScore ?? 5,
-          homeScore: game.homeScore ?? 4,
-        });
-      } else {
-        remainingGames.push({
-          ...game,
-          status: game.status === 'completed' ? 'scheduled' : game.status,
-          awayScore: null,
-          homeScore: null,
-        });
-      }
-    }
-
-    return { completedGames, remainingGames };
+    console.log('[officialKboEnglishSource] [CALL] getSchedule');
+    throw new Error('KBO English site Daily Schedule does not provide full season schedule data.');
   }
 };

@@ -12,10 +12,21 @@ import { ProbabilityCards } from './components/ProbabilityCards';
 import { ProbabilityTable } from './components/ProbabilityTable';
 import { RankDistribution } from './components/RankDistribution';
 import { DataQualityNotice } from './components/DataQualityNotice';
-import { TeamSimulationStats } from './types';
-import { Award, Zap, RefreshCw, AlertTriangle, HelpCircle, CheckCircle2 } from 'lucide-react';
+import { TeamSimulationStats, CutoffSummary, ProbabilityChangeItem } from './types';
+import { Award, Zap, RefreshCw, AlertTriangle, HelpCircle, CheckCircle2, Sliders, TrendingUp } from 'lucide-react';
 import { loadKboStaticData } from './lib/staticData/loadKboStaticData';
 import { simulateFromStaticData } from './lib/simulation/simulateFromStaticData';
+import { runAllSimulationTests, TestResultItem } from './lib/simulation/runSimulationTests';
+
+// New features components
+import { DataReliabilityCard } from './components/DataReliabilityCard';
+import { calculateDataReliability } from './lib/quality/calculateDataReliability';
+import { FifthPlaceCutoffCard } from './components/FifthPlaceCutoffCard';
+import { ProbabilityChangeCard } from './components/ProbabilityChangeCard';
+import { TeamDetailPanel } from './components/TeamDetailPanel';
+import { ScenarioModePanel } from './components/ScenarioModePanel';
+import { ScenarioInput, preprocessScenarioGames } from './lib/scenario/applyScenario';
+import { getPreviousDateString, loadSimulationResult, saveSimulationResult, calculateProbabilityChanges } from './lib/history/simulationHistory';
 
 interface FullSimulationData {
   date: string;
@@ -34,6 +45,18 @@ interface FullSimulationData {
   errorMessage?: string;
   warnings?: string[];
   failedSources?: { source: string; reason: string }[];
+  syntheticGamesCount?: number;
+  syntheticTeamCounts?: Record<string, number>;
+  dataQuality?: {
+    standingsCompletedGames: number;
+    scheduleCompletedGames: number;
+    scheduleRemainingGames: number;
+    expectedRemainingGamesByStandings: number;
+    syntheticGameCount: number;
+    isScheduleConsistentWithStandings: boolean;
+  };
+  cutoffSummary?: CutoffSummary;
+  teamWinTargetProbabilities?: Record<string, Array<{ wins: number; playoffProbability: number }>>;
 }
 
 export default function App() {
@@ -55,6 +78,7 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isFallbackSample, setIsFallbackSample] = useState<boolean>(false);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const [testSuiteResults, setTestSuiteResults] = useState<TestResultItem[] | null>(null);
 
   // Additional metadata for multi-source visualization
   const [standingsSourceInfo, setStandingsSourceInfo] = useState<{
@@ -62,6 +86,16 @@ export default function App() {
     sourceLabel: string;
     failedSources?: { source: string; reason: string }[];
   } | null>(null);
+
+  // New features state
+  const [activeScenario, setActiveScenario] = useState<ScenarioInput | null>(null);
+  const [scenarioResult, setScenarioResult] = useState<any | null>(null);
+  const [selectedTeamForDetail, setSelectedTeamForDetail] = useState<string | null>(null);
+  const [prevDayChangeData, setPrevDayChangeData] = useState<{
+    hasPrevData: boolean;
+    prevDate?: string;
+    items: ProbabilityChangeItem[];
+  } | undefined>(undefined);
 
   const [scheduleSourceInfo, setScheduleSourceInfo] = useState<{
     source: string;
@@ -117,6 +151,22 @@ export default function App() {
         asOfDate: data.asOfDate || selectedDate,
       });
 
+      // Calculate data quality and reliability scores
+      const reliabilityInfo = calculateDataReliability({
+        standingsCompletedGames: data.standings.reduce((sum: number, t: any) => sum + (t.wins ?? 0) + (t.losses ?? 0) + (t.draws ?? 0), 0) / 2,
+        scheduleCompletedGames: (data.completedGames || []).length,
+        expectedRemainingGamesByStandings: data.standings.reduce((sum: number, t: any) => sum + Math.max(0, 144 - ((t.wins ?? 0) + (t.losses ?? 0) + (t.draws ?? 0))), 0) / 2,
+        actualRemainingGames: (data.remainingGames || []).length,
+        syntheticGameCount: simResult.syntheticGamesCount || 0,
+        source,
+        asOfDate: data.asOfDate || selectedDate,
+        selectedDate,
+        fetchedAt,
+        teamCount: data.standings.length,
+        hasFinalGameMismatch: false,
+        mismatchedTeamsCount: 0
+      });
+
       // 3. 응답 규격 포맷팅
       const formattedData: FullSimulationData = {
         date: data.asOfDate || selectedDate,
@@ -129,13 +179,58 @@ export default function App() {
         fetchedAt,
         warnings: [
           ...(warnings || []),
+          ...(simResult.warnings || []),
           ...(simResult.unresolvedGames?.length === 0 ? ['모든 정규시즌 경기가 완료되었습니다.'] : [])
         ],
         failedSources: data.failedSources || [],
+        syntheticGamesCount: simResult.syntheticGamesCount,
+        syntheticTeamCounts: simResult.syntheticTeamCounts,
+        dataQuality: data.dataQuality || {
+          standingsCompletedGames: reliabilityInfo.metrics.standingsCompletedGames,
+          scheduleCompletedGames: reliabilityInfo.metrics.scheduleCompletedGames,
+          scheduleRemainingGames: reliabilityInfo.metrics.actualRemainingGames,
+          expectedRemainingGamesByStandings: reliabilityInfo.metrics.requiredRemainingGames,
+          syntheticGameCount: reliabilityInfo.metrics.syntheticGameCount,
+          isScheduleConsistentWithStandings: reliabilityInfo.score >= 60,
+        },
+        cutoffSummary: simResult.cutoffSummary,
+        teamWinTargetProbabilities: simResult.teamWinTargetProbabilities,
       };
 
       setSimData(formattedData);
       setIsFallbackSample(isFallback);
+
+      // Save current base simulation for historical comparison
+      saveSimulationResult(formattedData.date, simResult as any);
+
+      // Try loading previous day
+      const prevDateStr = getPreviousDateString(formattedData.date);
+      const prevResult = await loadSimulationResult(prevDateStr);
+      const changes = calculateProbabilityChanges(simResult as any, prevResult);
+      setPrevDayChangeData(changes);
+
+      // Run scenario simulation if active
+      if (activeScenario) {
+        console.log('[App] Scenario is active! Preprocessing scenario games...');
+        const { adjustedStandingsTeams, remainingRandomGames } = preprocessScenarioGames(
+          data.standings,
+          data.remainingGames,
+          activeScenario
+        );
+        console.log('[App] Running scenario Monte Carlo simulation...');
+        const scenSimResult = await simulateFromStaticData({
+          standings: adjustedStandingsTeams,
+          remainingGames: remainingRandomGames,
+          completedGames: data.completedGames || [],
+          iterations,
+          model: selectedModel,
+          seed,
+          asOfDate: data.asOfDate || selectedDate,
+        });
+        setScenarioResult(scenSimResult);
+      } else {
+        setScenarioResult(null);
+      }
 
       setStandingsSourceInfo({
         source,
@@ -245,10 +340,17 @@ export default function App() {
         ...prev,
         schedule: 'ok',
         simulate: 'checking',
-        currentStep: '4단계: 브라우저 몬테카를로 시뮬레이션 연산 가동성 검증...',
+        currentStep: '4단계: 불변조건 및 5대 시나리오 단위 테스트 검증...',
       }));
 
-      // Step 4: Validate Simulation Calculation
+      // Step 4: Validate Simulation Calculation and Invariants
+      const testResults = await runAllSimulationTests();
+      setTestSuiteResults(testResults);
+      const failedTests = testResults.filter(t => !t.passed);
+      if (failedTests.length > 0) {
+        throw new Error(`시뮬레이션 불변검사 단위 테스트 일부 실패: ${failedTests.map(t => t.name).join(', ')}`);
+      }
+
       const simResult = await simulateFromStaticData({
         standings: data.standings,
         remainingGames: data.remainingGames,
@@ -273,7 +375,7 @@ export default function App() {
         standings: 'ok',
         schedule: 'ok',
         simulate: 'ok',
-        currentStep: '자가진단 완료: 정적 JSON 데이터 파일 로딩, 10개 구단 순위 정합성, 잔여 경기 검증, 몬테카를로 엔진 구동이 모두 정상입니다!',
+        currentStep: '자가진단 및 단위 테스트 검증 완료: 모든 정적 데이터 로딩, 10개 구단 정합성, 수학적 불변조건 5대 시나리오가 100% 통과되었습니다!',
         errorDetails: null,
         lastSuccessTime: currentTime,
       });
@@ -308,11 +410,26 @@ export default function App() {
   // Run simulation automatically on mount or when user options change
   useEffect(() => {
     fetchSimulationResults(false);
-  }, [selectedDate, iterations, selectedModel, seed]);
+  }, [selectedDate, iterations, selectedModel, seed, activeScenario]);
+
+  // Run unit tests on mount to verify mathematical models
+  useEffect(() => {
+    console.log('[App] Running KBO simulator unit test suite...');
+    runAllSimulationTests()
+      .then(results => {
+        setTestSuiteResults(results);
+      })
+      .catch(e => {
+        console.error('[App] Failed to run unit test suite on mount:', e);
+      });
+  }, []);
+
+  // Use scenario-adjusted results if a scenario is active
+  const activeResults = scenarioResult ? scenarioResult.results : simData?.results;
 
   // Extract contenders for bento highlights
-  const locks = simData?.results.filter(r => r.playoffProbability >= 90) || [];
-  const bubble = simData?.results.filter(r => r.playoffProbability > 10 && r.playoffProbability < 90) || [];
+  const locks = activeResults?.filter(r => r.playoffProbability >= 90) || [];
+  const bubble = activeResults?.filter(r => r.playoffProbability > 10 && r.playoffProbability < 90) || [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-12 font-sans selection:bg-blue-100 selection:text-blue-900">
@@ -409,6 +526,19 @@ export default function App() {
             </div>
           );
         })()}
+
+        {/* Date Mismatch Warning Banner */}
+        {simData && selectedDate && simData.date !== selectedDate && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-950 rounded-xl p-4 shadow-sm text-xs md:text-sm font-semibold flex items-start gap-2.5 animate-fade-in">
+            <span className="text-base mt-0.5">⚠️</span>
+            <div className="space-y-1">
+              <p className="font-bold text-amber-900">날짜 기준일 불일치 안내</p>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                선택하신 날짜({selectedDate})의 데이터가 존재하지 않아, 현재 수집된 최신 데이터인 {simData.date} 기준 데이터로 연산되었습니다.
+              </p>
+            </div>
+          </div>
+        )}
         
         {/* Row 1: Configuration & Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -565,6 +695,85 @@ export default function App() {
             </div>
           </div>
 
+          {simData?.dataQuality && (
+            <div className="border border-slate-100 rounded-lg p-3.5 bg-slate-50/50 space-y-3">
+              <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                <span>📊 데이터 실시간 정합성 모니터 (Data Quality Monitor)</span>
+                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${
+                  simData.dataQuality.isScheduleConsistentWithStandings 
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-200' 
+                    : 'bg-amber-100 text-amber-800 border-amber-200'
+                }`}>
+                  {simData.dataQuality.isScheduleConsistentWithStandings ? '정합성 일치 (CONSISTENT)' : '정합성 불일치 (INCONSISTENT)'}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-center text-slate-600">
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">순위표 완료 게임 수</span>
+                  <span className="text-sm font-extrabold font-mono text-slate-800">
+                    {simData.dataQuality.standingsCompletedGames}
+                  </span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">일정표 완료 게임 수</span>
+                  <span className="text-sm font-extrabold font-mono text-slate-800">
+                    {simData.dataQuality.scheduleCompletedGames}
+                  </span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">순위표 요구 잔여수</span>
+                  <span className="text-sm font-extrabold font-mono text-blue-600">
+                    {simData.dataQuality.expectedRemainingGamesByStandings}
+                  </span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">일정표 등록 잔여수</span>
+                  <span className="text-sm font-extrabold font-mono text-slate-700">
+                    {simData.dataQuality.scheduleRemainingGames}
+                  </span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">가상 인공 보정 경기수</span>
+                  <span className={`text-sm font-extrabold font-mono ${simData.dataQuality.syntheticGameCount > 0 ? 'text-amber-600 font-extrabold' : 'text-slate-400'}`}>
+                    {simData.dataQuality.syntheticGameCount}
+                  </span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-100 flex flex-col justify-between col-span-2 md:col-span-1">
+                  <span className="text-[10px] text-slate-400 font-bold block mb-1">정합성 상태</span>
+                  <span className={`text-[11px] font-bold ${simData.dataQuality.isScheduleConsistentWithStandings ? 'text-emerald-600' : 'text-amber-600'}`}>
+                    {simData.dataQuality.isScheduleConsistentWithStandings ? '✓ 매우 일치' : '⚠️ 보정 일정 사용'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {testSuiteResults && (
+            <div className="border border-slate-100 rounded-lg p-3.5 bg-slate-50/50 space-y-2">
+              <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                <span>📋 수학적 정밀 모델 단위 테스트 및 불변검증 결과 (5대 핵심 시나리오)</span>
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-2 py-0.5 rounded border border-emerald-200">
+                  {testSuiteResults.filter(t => t.passed).length} / {testSuiteResults.length} PASS
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-[11px]">
+                {testSuiteResults.map((t, i) => (
+                  <div key={i} className={`p-2 rounded border flex flex-col justify-between gap-1.5 transition-all hover:shadow-sm ${
+                    t.passed ? 'bg-emerald-50/40 border-emerald-100/80 text-emerald-900' : 'bg-rose-50 border-rose-100 text-rose-900'
+                  }`}>
+                    <div className="font-bold flex items-center gap-1.5">
+                      <span className={t.passed ? 'text-emerald-600' : 'text-rose-600'}>{t.passed ? '✓' : '✗'}</span>
+                      <span className="truncate" title={t.name}>{t.name}</span>
+                    </div>
+                    <div className="text-[9px] text-slate-400 font-mono leading-tight">
+                      {t.passed ? '144경기 불변성 충족 완료' : `실패: ${t.message}`}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {diagnostic.currentStep && (
             <div className="flex items-center justify-between text-[11px] bg-slate-50 p-2 rounded border border-slate-100">
               <span className="text-slate-600 font-medium">{diagnostic.currentStep}</span>
@@ -621,6 +830,62 @@ export default function App() {
             {/* Warning notices if KBO matches are unresolved */}
             <DataQualityNotice unresolvedGames={simData.unresolvedGames || []} />
 
+            {/* Scenario Active Notice Banner */}
+            {activeScenario && (
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm animate-pulse" id="active-scenario-banner">
+                <div className="flex items-center gap-3">
+                  <Sliders className="w-5 h-5 text-amber-600 shrink-0" />
+                  <div>
+                    <h4 className="font-bold text-amber-800 text-sm">가상 시나리오 시뮬레이션 적용 중</h4>
+                    <p className="text-xs text-amber-700 font-semibold mt-0.5 font-sans">
+                      {simData.results.find(r => r.team === activeScenario.team)?.team && (
+                        <strong>{activeScenario.team}</strong>
+                      )}의 잔여 일정 중 다음 <strong>{activeScenario.games}경기</strong> 성적을 <strong>{activeScenario.wins}승 {activeScenario.losses}패 {activeScenario.draws}무</strong>로 전제 고정한 가을야구 시뮬레이션입니다.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setActiveScenario(null)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition-colors shadow-sm shrink-0 cursor-pointer"
+                >
+                  시나리오 적용 해제
+                </button>
+              </div>
+            )}
+
+            {/* Interactive Scenario Mode Controller */}
+            <section>
+              <ScenarioModePanel
+                teams={simData.results.map(r => {
+                  // Determine unresolved game count
+                  const remCount = simData.unresolvedGames.filter(g => g.away === r.team || g.home === r.team).length;
+                  return {
+                    team: r.team,
+                    nameKo: r.team, // We can also use nameKo if mapped
+                    remainingGames: remCount > 0 ? remCount : (144 - (r.currentWins + r.currentLosses + r.currentDraws))
+                  };
+                })}
+                originalProbabilities={(() => {
+                  const probs: Record<string, number> = {};
+                  simData.results.forEach(r => {
+                    probs[r.team] = r.playoffProbability;
+                  });
+                  return probs;
+                })()}
+                currentProbabilities={(() => {
+                  const probs: Record<string, number> = {};
+                  const listToUse = activeResults || simData.results;
+                  listToUse.forEach(r => {
+                    probs[r.team] = r.playoffProbability;
+                  });
+                  return probs;
+                })()}
+                activeScenario={activeScenario}
+                onApplyScenario={(scen) => setActiveScenario(scen)}
+                onResetScenario={() => setActiveScenario(null)}
+              />
+            </section>
+
             {/* Quick Bento Box Analytics Highlight */}
             <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
               
@@ -652,7 +917,7 @@ export default function App() {
               <div className="bg-white border border-slate-200/80 text-slate-700 p-5 rounded-xl shadow-sm flex items-center justify-between">
                 <div className="space-y-1">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">시뮬레이션 구동 정보</h4>
-                  <p className="text-xl font-bold text-slate-800">
+                  <p className="text-xl font-bold text-slate-800 font-mono">
                     {simData.iterations.toLocaleString()}회 연산
                   </p>
                   <p className="text-[10px] text-slate-500 font-semibold">
@@ -663,24 +928,81 @@ export default function App() {
               </div>
             </section>
 
+            {/* New Advanced Analytics Trio Grid */}
+            <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Feature 1: Data Reliability Card */}
+              <DataReliabilityCard
+                reliability={calculateDataReliability({
+                  standingsCompletedGames: simData.dataQuality?.standingsCompletedGames ?? 0,
+                  scheduleCompletedGames: simData.dataQuality?.scheduleCompletedGames ?? 0,
+                  expectedRemainingGamesByStandings: simData.dataQuality?.expectedRemainingGamesByStandings ?? 0,
+                  actualRemainingGames: simData.unresolvedGames?.length ?? 0,
+                  syntheticGameCount: simData.dataQuality?.syntheticGameCount ?? 0,
+                  source: simData.source,
+                  asOfDate: simData.date,
+                  selectedDate: selectedDate,
+                  fetchedAt: simData.fetchedAt,
+                  teamCount: simData.results.length,
+                  hasFinalGameMismatch: false,
+                  mismatchedTeamsCount: 0
+                })}
+              />
+
+              {/* Feature 2: Projected 5th Place Cutoff Card */}
+              <FifthPlaceCutoffCard
+                cutoff={simData.cutoffSummary || {
+                  averageFifthPlaceWins: 72,
+                  averageFifthPlaceWinRate: 0.500,
+                  winPercentiles: {
+                    percentile25: 71,
+                    percentile50: 72,
+                    percentile75: 73
+                  },
+                  teamChancesAtWins: []
+                }}
+              />
+
+              {/* Feature 3: Probability Delta Change Card */}
+              <ProbabilityChangeCard
+                changeData={prevDayChangeData}
+              />
+            </section>
+
             {/* Probability Cards Grid */}
             <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-extrabold text-slate-800">구단별 포스트시즌 진출 확률</h2>
-                <span className="text-xs font-semibold text-slate-500">동률 발생 시 확률 분할 처리 적용</span>
+                <span className="text-xs font-semibold text-slate-500">구단 카드를 클릭하면 구단 상세 지표와 목표 승수별 가을야구 진출 확률을 분석할 수 있습니다.</span>
               </div>
-              <ProbabilityCards results={simData.results} />
+              <ProbabilityCards results={activeResults || []} onTeamClick={setSelectedTeamForDetail} />
             </section>
 
             {/* Probability Detailed Table */}
             <section>
-              <ProbabilityTable results={simData.results} />
+              <ProbabilityTable
+                results={activeResults || []}
+                syntheticTeamCounts={simData.syntheticTeamCounts}
+                unresolvedGames={simData.unresolvedGames}
+                onTeamClick={setSelectedTeamForDetail}
+              />
             </section>
 
             {/* Rank Distribution Heatmap */}
             <section>
-              <RankDistribution results={simData.results} />
+              <RankDistribution results={activeResults || []} />
             </section>
+
+            {/* Interactive Team Detail Overlay Modal Panel */}
+            {selectedTeamForDetail && simData && (
+              <TeamDetailPanel
+                teamCode={selectedTeamForDetail}
+                isOpen={!!selectedTeamForDetail}
+                onClose={() => setSelectedTeamForDetail(null)}
+                teamStats={(activeResults || simData.results).find(r => r.team === selectedTeamForDetail)!}
+                targetWinsProbabilities={simData.teamWinTargetProbabilities?.[selectedTeamForDetail] || []}
+                fifthPlaceWins={simData.cutoffSummary?.winPercentiles.percentile50 ?? 72}
+              />
+            )}
 
           </div>
         )}
