@@ -1,0 +1,1282 @@
+[
+  {
+    "date": "2024-04-02",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "HANWHA",
+    "awayScore": 1,
+    "homeScore": 0,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-02",
+    "time": "18:30",
+    "away": "NC",
+    "home": "LG",
+    "awayScore": 7,
+    "homeScore": 5,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-02",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "SAMSUNG",
+    "awayScore": 8,
+    "homeScore": 3,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-02",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SSG",
+    "awayScore": 6,
+    "homeScore": 13,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-02",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KT",
+    "awayScore": 6,
+    "homeScore": 10,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-03",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "HANWHA",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "한밭",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-03",
+    "time": "18:30",
+    "away": "NC",
+    "home": "LG",
+    "awayScore": 0,
+    "homeScore": 5,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-03",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "SAMSUNG",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "대구",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-03",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SSG",
+    "awayScore": 3,
+    "homeScore": 5,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-03",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KT",
+    "awayScore": 5,
+    "homeScore": 1,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-04",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "HANWHA",
+    "awayScore": 5,
+    "homeScore": 6,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-04",
+    "time": "18:30",
+    "away": "NC",
+    "home": "LG",
+    "awayScore": 7,
+    "homeScore": 8,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-04",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "SAMSUNG",
+    "awayScore": 10,
+    "homeScore": 1,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-04",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SSG",
+    "awayScore": 2,
+    "homeScore": 3,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-04",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KT",
+    "awayScore": 6,
+    "homeScore": 3,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-05",
+    "time": "18:30",
+    "away": "KT",
+    "home": "LG",
+    "awayScore": 8,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-05",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "LOTTE",
+    "awayScore": 4,
+    "homeScore": 3,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-05",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "KIA",
+    "awayScore": 2,
+    "homeScore": 5,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-05",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "NC",
+    "awayScore": 0,
+    "homeScore": 5,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-05",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "KIWOOM",
+    "awayScore": 7,
+    "homeScore": 11,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-06",
+    "time": "17:00",
+    "away": "KT",
+    "home": "LG",
+    "awayScore": 4,
+    "homeScore": 8,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-06",
+    "time": "17:00",
+    "away": "DOOSAN",
+    "home": "LOTTE",
+    "awayScore": 1,
+    "homeScore": 8,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-06",
+    "time": "17:00",
+    "away": "SAMSUNG",
+    "home": "KIA",
+    "awayScore": 7,
+    "homeScore": 4,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-06",
+    "time": "17:00",
+    "away": "SSG",
+    "home": "NC",
+    "awayScore": 3,
+    "homeScore": 16,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-06",
+    "time": "17:00",
+    "away": "HANWHA",
+    "home": "KIWOOM",
+    "awayScore": 6,
+    "homeScore": 7,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-07",
+    "time": "14:00",
+    "away": "KT",
+    "home": "LG",
+    "awayScore": 7,
+    "homeScore": 16,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-07",
+    "time": "14:00",
+    "away": "DOOSAN",
+    "home": "LOTTE",
+    "awayScore": 6,
+    "homeScore": 7,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-07",
+    "time": "14:00",
+    "away": "SAMSUNG",
+    "home": "KIA",
+    "awayScore": 7,
+    "homeScore": 3,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-07",
+    "time": "14:00",
+    "away": "SSG",
+    "home": "NC",
+    "awayScore": 1,
+    "homeScore": 10,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-07",
+    "time": "14:00",
+    "away": "HANWHA",
+    "home": "KIWOOM",
+    "awayScore": 3,
+    "homeScore": 4,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-09",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "DOOSAN",
+    "awayScore": 3,
+    "homeScore": 5,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-09",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "LOTTE",
+    "awayScore": 8,
+    "homeScore": 1,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-09",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "SSG",
+    "awayScore": 5,
+    "homeScore": 8,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-09",
+    "time": "18:30",
+    "away": "LG",
+    "home": "KIA",
+    "awayScore": 2,
+    "homeScore": 7,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-09",
+    "time": "18:30",
+    "away": "KT",
+    "home": "NC",
+    "awayScore": 6,
+    "homeScore": 1,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-10",
+    "time": "14:00",
+    "away": "HANWHA",
+    "home": "DOOSAN",
+    "awayScore": 4,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-10",
+    "time": "14:00",
+    "away": "SAMSUNG",
+    "home": "LOTTE",
+    "awayScore": 10,
+    "homeScore": 7,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-10",
+    "time": "14:00",
+    "away": "KIWOOM",
+    "home": "SSG",
+    "awayScore": 4,
+    "homeScore": 8,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-10",
+    "time": "14:00",
+    "away": "LG",
+    "home": "KIA",
+    "awayScore": 4,
+    "homeScore": 5,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-10",
+    "time": "14:00",
+    "away": "KT",
+    "home": "NC",
+    "awayScore": 2,
+    "homeScore": 3,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-11",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "DOOSAN",
+    "awayScore": 3,
+    "homeScore": 0,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-11",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "LOTTE",
+    "awayScore": 4,
+    "homeScore": 0,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-11",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "SSG",
+    "awayScore": 5,
+    "homeScore": 2,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-11",
+    "time": "18:30",
+    "away": "LG",
+    "home": "KIA",
+    "awayScore": 4,
+    "homeScore": 8,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-11",
+    "time": "18:30",
+    "away": "KT",
+    "home": "NC",
+    "awayScore": 7,
+    "homeScore": 8,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-12",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "HANWHA",
+    "awayScore": 8,
+    "homeScore": 4,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-12",
+    "time": "18:30",
+    "away": "LG",
+    "home": "DOOSAN",
+    "awayScore": 2,
+    "homeScore": 1,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-12",
+    "time": "18:30",
+    "away": "NC",
+    "home": "SAMSUNG",
+    "awayScore": 8,
+    "homeScore": 3,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-12",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "KT",
+    "awayScore": 3,
+    "homeScore": 8,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-12",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "KIWOOM",
+    "awayScore": 4,
+    "homeScore": 9,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-13",
+    "time": "14:00",
+    "away": "KIA",
+    "home": "HANWHA",
+    "awayScore": 11,
+    "homeScore": 9,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-13",
+    "time": "17:00",
+    "away": "LG",
+    "home": "DOOSAN",
+    "awayScore": 2,
+    "homeScore": 5,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-13",
+    "time": "17:00",
+    "away": "NC",
+    "home": "SAMSUNG",
+    "awayScore": 4,
+    "homeScore": 3,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-13",
+    "time": "17:00",
+    "away": "SSG",
+    "home": "KT",
+    "awayScore": 11,
+    "homeScore": 8,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-13",
+    "time": "17:00",
+    "away": "LOTTE",
+    "home": "KIWOOM",
+    "awayScore": 1,
+    "homeScore": 8,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-14",
+    "time": "14:00",
+    "away": "KIA",
+    "home": "HANWHA",
+    "awayScore": 5,
+    "homeScore": 2,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-14",
+    "time": "14:00",
+    "away": "LG",
+    "home": "DOOSAN",
+    "awayScore": 5,
+    "homeScore": 9,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-14",
+    "time": "14:00",
+    "away": "NC",
+    "home": "SAMSUNG",
+    "awayScore": 5,
+    "homeScore": 12,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-14",
+    "time": "14:00",
+    "away": "SSG",
+    "home": "KT",
+    "awayScore": 8,
+    "homeScore": 1,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-14",
+    "time": "14:00",
+    "away": "LOTTE",
+    "home": "KIWOOM",
+    "awayScore": 5,
+    "homeScore": 7,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-16",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "LG",
+    "awayScore": 2,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-16",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SAMSUNG",
+    "awayScore": 5,
+    "homeScore": 7,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-16",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "SSG",
+    "awayScore": 4,
+    "homeScore": 6,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-16",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "NC",
+    "awayScore": 7,
+    "homeScore": 4,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-16",
+    "time": "18:30",
+    "away": "KT",
+    "home": "KIWOOM",
+    "awayScore": 3,
+    "homeScore": 6,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-17",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "LG",
+    "awayScore": 5,
+    "homeScore": 6,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-17",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SAMSUNG",
+    "awayScore": 2,
+    "homeScore": 9,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-17",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "SSG",
+    "awayScore": 11,
+    "homeScore": 3,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-17",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "NC",
+    "awayScore": 3,
+    "homeScore": 4,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-17",
+    "time": "18:30",
+    "away": "KT",
+    "home": "KIWOOM",
+    "awayScore": 6,
+    "homeScore": 4,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-18",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "LG",
+    "awayScore": 9,
+    "homeScore": 2,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-18",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "SAMSUNG",
+    "awayScore": 2,
+    "homeScore": 5,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-18",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "SSG",
+    "awayScore": 5,
+    "homeScore": 7,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-18",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "NC",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "창원",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-18",
+    "time": "18:30",
+    "away": "KT",
+    "home": "KIWOOM",
+    "awayScore": 3,
+    "homeScore": 0,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-19",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "HANWHA",
+    "awayScore": 1,
+    "homeScore": 6,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-19",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "DOOSAN",
+    "awayScore": 8,
+    "homeScore": 19,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-19",
+    "time": "18:30",
+    "away": "KT",
+    "home": "LOTTE",
+    "awayScore": 3,
+    "homeScore": 4,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-19",
+    "time": "18:30",
+    "away": "LG",
+    "home": "SSG",
+    "awayScore": 4,
+    "homeScore": 1,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-19",
+    "time": "18:30",
+    "away": "NC",
+    "home": "KIA",
+    "awayScore": 3,
+    "homeScore": 4,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-20",
+    "time": "17:00",
+    "away": "SAMSUNG",
+    "home": "HANWHA",
+    "awayScore": 1,
+    "homeScore": 0,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-20",
+    "time": "17:00",
+    "away": "KIWOOM",
+    "home": "DOOSAN",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "잠실",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-20",
+    "time": "17:00",
+    "away": "KT",
+    "home": "LOTTE",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "사직",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-20",
+    "time": "17:00",
+    "away": "LG",
+    "home": "SSG",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "문학",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-20",
+    "time": "17:00",
+    "away": "NC",
+    "home": "KIA",
+    "awayScore": 2,
+    "homeScore": 9,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "14:00",
+    "away": "SAMSUNG",
+    "home": "HANWHA",
+    "awayScore": 5,
+    "homeScore": 3,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "14:00",
+    "away": "NC",
+    "home": "KIA",
+    "awayScore": 15,
+    "homeScore": 4,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "14:00",
+    "away": "KIWOOM",
+    "home": "DOOSAN",
+    "awayScore": 8,
+    "homeScore": 4,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "14:00",
+    "away": "KT",
+    "home": "LOTTE",
+    "awayScore": 9,
+    "homeScore": 9,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "14:00",
+    "away": "LG",
+    "home": "SSG",
+    "awayScore": 10,
+    "homeScore": 8,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "17:00",
+    "away": "KIWOOM",
+    "home": "DOOSAN",
+    "awayScore": 1,
+    "homeScore": 2,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "17:00",
+    "away": "KT",
+    "home": "LOTTE",
+    "awayScore": 5,
+    "homeScore": 7,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-21",
+    "time": "17:00",
+    "away": "LG",
+    "home": "SSG",
+    "awayScore": 5,
+    "homeScore": 5,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-23",
+    "time": "18:30",
+    "away": "NC",
+    "home": "DOOSAN",
+    "awayScore": 3,
+    "homeScore": 4,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-23",
+    "time": "18:30",
+    "away": "LG",
+    "home": "SAMSUNG",
+    "awayScore": 3,
+    "homeScore": 7,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-23",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "LOTTE",
+    "awayScore": null,
+    "homeScore": null,
+    "stadium": "사직",
+    "status": "scheduled"
+  },
+  {
+    "date": "2024-04-23",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "KT",
+    "awayScore": 6,
+    "homeScore": 9,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-23",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KIWOOM",
+    "awayScore": 5,
+    "homeScore": 2,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-24",
+    "time": "18:30",
+    "away": "NC",
+    "home": "DOOSAN",
+    "awayScore": 3,
+    "homeScore": 1,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-24",
+    "time": "18:30",
+    "away": "LG",
+    "home": "SAMSUNG",
+    "awayScore": 0,
+    "homeScore": 6,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-24",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "LOTTE",
+    "awayScore": 12,
+    "homeScore": 7,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-24",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "KT",
+    "awayScore": 1,
+    "homeScore": 7,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-24",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KIWOOM",
+    "awayScore": 6,
+    "homeScore": 4,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-25",
+    "time": "18:30",
+    "away": "NC",
+    "home": "DOOSAN",
+    "awayScore": 3,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-25",
+    "time": "18:30",
+    "away": "LG",
+    "home": "SAMSUNG",
+    "awayScore": 8,
+    "homeScore": 2,
+    "stadium": "대구",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-25",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "LOTTE",
+    "awayScore": 3,
+    "homeScore": 6,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-25",
+    "time": "18:30",
+    "away": "HANWHA",
+    "home": "KT",
+    "awayScore": 0,
+    "homeScore": 9,
+    "stadium": "수원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-25",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "KIWOOM",
+    "awayScore": 13,
+    "homeScore": 2,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-26",
+    "time": "18:30",
+    "away": "DOOSAN",
+    "home": "HANWHA",
+    "awayScore": 10,
+    "homeScore": 5,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-26",
+    "time": "18:30",
+    "away": "KIA",
+    "home": "LG",
+    "awayScore": 6,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-26",
+    "time": "18:30",
+    "away": "KT",
+    "home": "SSG",
+    "awayScore": 2,
+    "homeScore": 5,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-26",
+    "time": "18:30",
+    "away": "LOTTE",
+    "home": "NC",
+    "awayScore": 0,
+    "homeScore": 4,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-26",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "KIWOOM",
+    "awayScore": 3,
+    "homeScore": 0,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-27",
+    "time": "14:00",
+    "away": "KIA",
+    "home": "LG",
+    "awayScore": 3,
+    "homeScore": 6,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-27",
+    "time": "17:00",
+    "away": "DOOSAN",
+    "home": "HANWHA",
+    "awayScore": 5,
+    "homeScore": 10,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-27",
+    "time": "17:00",
+    "away": "KT",
+    "home": "SSG",
+    "awayScore": 5,
+    "homeScore": 2,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-27",
+    "time": "17:00",
+    "away": "LOTTE",
+    "home": "NC",
+    "awayScore": 0,
+    "homeScore": 2,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-27",
+    "time": "17:00",
+    "away": "SAMSUNG",
+    "home": "KIWOOM",
+    "awayScore": 11,
+    "homeScore": 0,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-28",
+    "time": "14:00",
+    "away": "DOOSAN",
+    "home": "HANWHA",
+    "awayScore": 17,
+    "homeScore": 8,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-28",
+    "time": "14:00",
+    "away": "KIA",
+    "home": "LG",
+    "awayScore": 10,
+    "homeScore": 7,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-28",
+    "time": "14:00",
+    "away": "KT",
+    "home": "SSG",
+    "awayScore": 6,
+    "homeScore": 11,
+    "stadium": "문학",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-28",
+    "time": "14:00",
+    "away": "LOTTE",
+    "home": "NC",
+    "awayScore": 3,
+    "homeScore": 5,
+    "stadium": "창원",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-28",
+    "time": "14:00",
+    "away": "SAMSUNG",
+    "home": "KIWOOM",
+    "awayScore": 11,
+    "homeScore": 6,
+    "stadium": "고척",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-30",
+    "time": "18:30",
+    "away": "SSG",
+    "home": "HANWHA",
+    "awayScore": 2,
+    "homeScore": 8,
+    "stadium": "한밭",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-30",
+    "time": "18:30",
+    "away": "SAMSUNG",
+    "home": "DOOSAN",
+    "awayScore": 0,
+    "homeScore": 4,
+    "stadium": "잠실",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-30",
+    "time": "18:30",
+    "away": "KIWOOM",
+    "home": "LOTTE",
+    "awayScore": 9,
+    "homeScore": 7,
+    "stadium": "사직",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-30",
+    "time": "18:30",
+    "away": "KT",
+    "home": "KIA",
+    "awayScore": 11,
+    "homeScore": 4,
+    "stadium": "광주",
+    "status": "completed"
+  },
+  {
+    "date": "2024-04-30",
+    "time": "18:30",
+    "away": "LG",
+    "home": "NC",
+    "awayScore": 0,
+    "homeScore": 8,
+    "stadium": "창원",
+    "status": "completed"
+  }
+]

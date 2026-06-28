@@ -1,18 +1,23 @@
 /**
  * @file parseStandings.ts
- * @description Fetches and parses the official KBO team rankings table. Dynamically maps columns using header labels for maximum resilience.
+ * @description Fetches and parses the official KBO team rankings and head-to-head records.
+ * Features a dual-parsing strategy: an adaptive HTML table parser and a robust text-based fallback regex parser.
  */
 
 import * as cheerio from 'cheerio';
 import { normalizeTeamName } from './normalizeTeamName';
 import { CONFIG } from '../../config';
 import { StandingsTeam, KBOStandingsResult } from '../../types';
+import { fetchKboPage } from './fetchKboPage';
 
 /**
- * Returns realistic fallback/sample standings for testing or emergency recovery if KBO is down.
+ * Generates realistic fallback/sample standings in case KBO scraping fails completely.
+ * 
+ * @param dateStr - The target date in YYYY-MM-DD format.
+ * @returns KBOStandingsResult containing fallback standings.
  */
 export function getFallbackStandings(dateStr: string): KBOStandingsResult {
-  console.log(`[parseStandings] Generating fallback standings for date: ${dateStr}`);
+  console.log(`[parseStandings] [CALL] getFallbackStandings - Date: ${dateStr}`);
   const teams: StandingsTeam[] = [
     { team: 'KIA', nameKo: 'KIA', games: 80, wins: 48, losses: 30, draws: 2, winRate: 0.615, rank: 1 },
     { team: 'SAMSUNG', nameKo: '삼성', games: 80, wins: 46, losses: 32, draws: 2, winRate: 0.590, rank: 2 },
@@ -34,14 +39,15 @@ export function getFallbackStandings(dateStr: string): KBOStandingsResult {
     headToHead[t1] = {};
     for (const t2 of teamCodes) {
       if (t1 === t2) continue;
-      // Generate some dummy head to head matches (around 7-9 games played per pair so far)
-      const gamesPlayed = 8;
-      const t1Wins = Math.floor(Math.random() * (gamesPlayed + 1));
-      const t1Losses = gamesPlayed - t1Wins;
+      // Generate deterministic pseudo-random dummy head to head matches to keep results stable
+      const charSum = t1.charCodeAt(0) + t2.charCodeAt(0);
+      const wins = charSum % 5;
+      const losses = 8 - wins - (charSum % 2 === 0 ? 0 : 1);
+      const draws = 8 - wins - losses;
       headToHead[t1][t2] = {
-        wins: t1Wins,
-        losses: t1Losses,
-        draws: 0
+        wins,
+        losses,
+        draws: Math.max(0, draws)
       };
     }
   }
@@ -51,91 +57,118 @@ export function getFallbackStandings(dateStr: string): KBOStandingsResult {
     source: 'fallback-sample',
     teams,
     headToHead,
+    errorType: '샘플 데이터 사용',
+    errorMessage: 'KBO 실시간 데이터를 가져올 수 없어 예비 데이터를 사용합니다.',
   };
 }
 
 /**
- * Fetches and parses KBO standings from the official page.
- * Uses adaptive header mapping for robustness.
+ * Parse team standings from the team ranking table (adaptive header mapping).
  * 
- * @param dateStr - Target date in YYYY-MM-DD format
- * @returns KBOStandingsResult containing standings and head-to-head records.
+ * @param $ - Cheerio loaded HTML document.
+ * @returns Array of StandingsTeam or null if table parsing fails.
  */
-export async function parseStandings(dateStr: string): Promise<KBOStandingsResult> {
-  console.log(`[parseStandings] Fetching standings for: ${dateStr}`);
+function parseStandingsTable($: cheerio.CheerioAPI): StandingsTeam[] | null {
+  console.log(`[parseStandings] [CALL] parseStandingsTable`);
+  let standingsTable: cheerio.Cheerio<any> | null = null;
+  const mappedIndices: Record<string, number> = {};
 
-  try {
-    const response = await fetch(CONFIG.KBO_URLS.standings, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-      }
+  $('table').each((_i, elem) => {
+    const headers: string[] = [];
+    $(elem).find('thead th, thead td').each((_j, th) => {
+      headers.push($(th).text().trim());
     });
 
-    if (!response.ok) {
-      throw new Error(`KBO server returned status ${response.status}`);
-    }
+    if (headers.includes('팀명') && headers.includes('승') && headers.includes('패')) {
+      console.log(`[parseStandings] Found team ranking table on page via headers: ${JSON.stringify(headers)}`);
+      standingsTable = $(elem);
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
-
-    // Let's find the main team standings table. It's usually inside `.tbl-type1` or `.tbl`
-    let standingsTable: cheerio.Cheerio<any> | null = null;
-    let mappedIndices: Record<string, number> = {};
-
-    $('table').each((_i, elem) => {
-      const headers: string[] = [];
-      $(elem).find('thead th, thead td').each((_j, th) => {
-        headers.push($(th).text().trim());
+      headers.forEach((header, idx) => {
+        if (header.includes('순위') || header === '순') mappedIndices['rank'] = idx;
+        else if (header.includes('팀명') || header === '팀') mappedIndices['team'] = idx;
+        else if ((header.includes('경기') && !header.includes('최근')) || header === '경') mappedIndices['games'] = idx;
+        else if (header === '승') mappedIndices['wins'] = idx;
+        else if (header === '패') mappedIndices['losses'] = idx;
+        else if (header === '무') mappedIndices['draws'] = idx;
+        else if (header.includes('승률')) mappedIndices['winRate'] = idx;
       });
-
-      // Look for a table that has rank (순위), team name (팀명), games (경기)
-      if (headers.includes('팀명') && headers.includes('승') && headers.includes('패')) {
-        console.log(`[parseStandings] Found KBO standings table! Headers: ${JSON.stringify(headers)}`);
-        standingsTable = $(elem);
-
-        // Map header text to column index dynamically
-        headers.forEach((header, idx) => {
-          if (header.includes('순위') || header === '순') mappedIndices['rank'] = idx;
-          else if (header.includes('팀명') || header === '팀') mappedIndices['team'] = idx;
-          else if (header.includes('경기') || header === '경') mappedIndices['games'] = idx;
-          else if (header === '승') mappedIndices['wins'] = idx;
-          else if (header === '패') mappedIndices['losses'] = idx;
-          else if (header === '무') mappedIndices['draws'] = idx;
-          else if (header.includes('승률')) mappedIndices['winRate'] = idx;
-        });
-      }
-    });
-
-    if (!standingsTable || mappedIndices['team'] === undefined || mappedIndices['wins'] === undefined) {
-      console.error(`[parseStandings] Standings table headers not found or incomplete.`);
-      throw new Error('Could not identify standings table structure on KBO page');
     }
+  });
 
-    const teams: StandingsTeam[] = [];
+  if (!standingsTable || mappedIndices['team'] === undefined || mappedIndices['wins'] === undefined) {
+    console.log(`[parseStandings] Table-based standings parsing failed: table or headers not found.`);
+    return null;
+  }
 
-    // Parse standings rows
-    standingsTable.find('tbody tr').each((_i, elem) => {
-      const cells = $(elem).find('td');
-      if (cells.length === 0) return;
+  const teams: StandingsTeam[] = [];
+  standingsTable.find('tbody tr').each((_i, elem) => {
+    const cells = $(elem).find('td');
+    if (cells.length === 0) return;
 
-      const getVal = (col: string): string => {
-        const idx = mappedIndices[col];
-        return idx !== undefined ? $(cells[idx]).text().trim() : '';
-      };
+    const getVal = (col: string): string => {
+      const idx = mappedIndices[col];
+      return idx !== undefined ? $(cells[idx]).text().trim() : '';
+    };
 
-      const rawTeamName = getVal('team');
-      if (!rawTeamName) return;
+    const rawTeamName = getVal('team');
+    if (!rawTeamName) return;
+
+    const teamCode = normalizeTeamName(rawTeamName);
+    if (teamCode === 'UNKNOWN') return;
+
+    const rank = parseInt(getVal('rank')) || (teams.length + 1);
+    const games = parseInt(getVal('games')) || 0;
+    const wins = parseInt(getVal('wins')) || 0;
+    const losses = parseInt(getVal('losses')) || 0;
+    const draws = parseInt(getVal('draws')) || 0;
+    const winRate = parseFloat(getVal('winRate')) || 0;
+
+    teams.push({
+      team: teamCode,
+      nameKo: CONFIG.TEAMS[teamCode]?.nameKo || rawTeamName,
+      games,
+      wins,
+      losses,
+      draws,
+      winRate,
+      rank,
+    });
+  });
+
+  return teams.length === 10 ? teams : null;
+}
+
+/**
+ * Fallback body text-based standings parser using regular expressions.
+ * 
+ * @param bodyText - Raw body text of KBO standings page.
+ * @returns Array of StandingsTeam or null if parsing fails.
+ */
+function parseStandingsText(bodyText: string): StandingsTeam[] | null {
+  console.log(`[parseStandings] [CALL] parseStandingsText`);
+  const lines = bodyText.split('\n');
+  const teams: StandingsTeam[] = [];
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    // Matches e.g.: "1 LG 76 48 28 0 0.632"
+    const match = line.match(/^(\d+)\s+([가-힣A-Za-z0-9]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)/);
+    if (match) {
+      const rank = parseInt(match[1]);
+      const rawTeamName = match[2];
+      const games = parseInt(match[3]);
+      const wins = parseInt(match[4]);
+      const losses = parseInt(match[5]);
+      const draws = parseInt(match[6]);
+      const winRate = parseFloat(match[7]);
 
       const teamCode = normalizeTeamName(rawTeamName);
-      if (teamCode === 'UNKNOWN') return;
+      if (teamCode === 'UNKNOWN') continue;
 
-      const rank = parseInt(getVal('rank')) || (teams.length + 1);
-      const games = parseInt(getVal('games')) || 0;
-      const wins = parseInt(getVal('wins')) || 0;
-      const losses = parseInt(getVal('losses')) || 0;
-      const draws = parseInt(getVal('draws')) || 0;
-      const winRate = parseFloat(getVal('winRate')) || 0;
+      // Avoid duplicates
+      if (teams.some(t => t.team === teamCode)) continue;
 
       teams.push({
         team: teamCode,
@@ -147,122 +180,250 @@ export async function parseStandings(dateStr: string): Promise<KBOStandingsResul
         winRate,
         rank,
       });
+    }
+  }
+
+  console.log(`[parseStandings] Text parser extracted ${teams.length} teams.`);
+  return teams.length === 10 ? teams : null;
+}
+
+/**
+ * Parses head-to-head record using cheerio table selector.
+ * 
+ * @param $ - Cheerio loaded HTML document.
+ * @returns Head-to-head grid mapping or null.
+ */
+function parseHeadToHeadTable($: cheerio.CheerioAPI): Record<string, Record<string, { wins: number; losses: number; draws: number }>> | null {
+  console.log(`[parseStandings] [CALL] parseHeadToHeadTable`);
+  let headToHeadTable: cheerio.Cheerio<any> | null = null;
+
+  $('table').each((_i, elem) => {
+    const headers: string[] = [];
+    $(elem).find('thead th').each((_j, th) => {
+      headers.push($(th).text().trim());
     });
 
-    console.log(`[parseStandings] Successfully parsed standings for ${teams.length} teams.`);
-
-    // Next, look for the head-to-head grid ("팀간승패표") on the page.
-    // It's often another table on the page. It has "팀명" in header, and columns are team names.
-    const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
-    const teamCodes = Object.keys(CONFIG.TEAMS);
-    
-    // Initialize headToHead with empty records
-    for (const t1 of teamCodes) {
-      headToHead[t1] = {};
-      for (const t2 of teamCodes) {
-        if (t1 !== t2) {
-          headToHead[t1][t2] = { wins: 0, losses: 0, draws: 0 };
-        }
-      }
+    const matches = headers.filter(h => normalizeTeamName(h) !== 'UNKNOWN');
+    if (matches.length >= 5) {
+      headToHeadTable = $(elem);
     }
+  });
 
-    let headToHeadTable: cheerio.Cheerio<any> | null = null;
-    $('table').each((_i, elem) => {
-      const headers: string[] = [];
-      $(elem).find('thead th').each((_j, th) => {
-        headers.push($(th).text().trim());
-      });
+  if (!headToHeadTable) return null;
 
-      // A head-to-head table will have teams in headers (e.g. at least 5 of our normalized team names or display names)
-      const matches = headers.filter(h => {
-        const norm = normalizeTeamName(h);
-        return norm !== 'UNKNOWN';
-      });
+  const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
+  const teamCodes = Object.keys(CONFIG.TEAMS);
+  for (const t1 of teamCodes) {
+    headToHead[t1] = {};
+    for (const t2 of teamCodes) {
+      if (t1 !== t2) headToHead[t1][t2] = { wins: 0, losses: 0, draws: 0 };
+    }
+  }
 
-      if (matches.length >= 5) {
-        console.log(`[parseStandings] Found team vs team head-to-head table!`);
-        headToHeadTable = $(elem);
+  const headers: string[] = [];
+  $(headToHeadTable).find('thead th, thead td').each((_j, th) => {
+    headers.push($(th).text().trim());
+  });
+
+  let rowsCount = 0;
+  $(headToHeadTable).find('tbody tr').each((_i, row) => {
+    const cells = $(row).find('td, th');
+    if (cells.length === 0) return;
+
+    const rowTeamName = $(cells[0]).text().trim();
+    const rowTeamCode = normalizeTeamName(rowTeamName);
+    if (rowTeamCode === 'UNKNOWN') return;
+
+    rowsCount++;
+    cells.each((cellIdx, cell) => {
+      if (cellIdx === 0) return;
+      const colTeamName = headers[cellIdx];
+      const colTeamCode = normalizeTeamName(colTeamName);
+      if (colTeamCode === 'UNKNOWN' || colTeamCode === rowTeamCode) return;
+
+      const text = $(cell).text().trim();
+      if (text && text !== '-' && text !== '0') {
+        const parts = text.split(/[-–—/]/).map(p => parseInt(p.trim()) || 0);
+        const wins = parts[0] || 0;
+        const losses = parts[1] || 0;
+        const draws = parts[2] || 0;
+
+        headToHead[rowTeamCode][colTeamCode] = { wins, losses, draws };
       }
     });
+  });
 
-    if (headToHeadTable) {
-      // Parse the head-to-head grid
-      // Rows typically have a team name in the first cell, and subsequent cells are wins-losses-draws (e.g. "7-5-1" or "7승5패" or "7-5")
-      const headers: string[] = [];
-      $(headToHeadTable).find('thead th, thead td').each((_j, th) => {
-        headers.push($(th).text().trim());
-      });
+  return rowsCount >= 5 ? headToHead : null;
+}
 
-      $(headToHeadTable).find('tbody tr').each((_i, row) => {
-        const cells = $(row).find('td, th');
-        if (cells.length === 0) return;
+/**
+ * Backup head-to-head parser from page body text.
+ * 
+ * @param bodyText - Raw body text of KBO standings page.
+ * @returns Head-to-head grid mapping or null.
+ */
+function parseHeadToHeadText(bodyText: string): Record<string, Record<string, { wins: number; losses: number; draws: number }>> | null {
+  console.log(`[parseStandings] [CALL] parseHeadToHeadText`);
+  const lines = bodyText.split('\n');
 
-        const rowTeamName = $(cells[0]).text().trim();
-        const rowTeamCode = normalizeTeamName(rowTeamName);
-        if (rowTeamCode === 'UNKNOWN') return;
-
-        cells.each((cellIdx, cell) => {
-          if (cellIdx === 0) return; // skip row header
-          const colTeamName = headers[cellIdx];
-          const colTeamCode = normalizeTeamName(colTeamName);
-          if (colTeamCode === 'UNKNOWN' || colTeamCode === rowTeamCode) return;
-
-          const text = $(cell).text().trim(); // typically "W-L-D" or "W-L" (e.g. "8-4" or "8-4-0")
-          if (text && text !== '-' && text !== '0') {
-            const parts = text.split(/[-–—/]/).map(p => parseInt(p.trim()) || 0);
-            const wins = parts[0] || 0;
-            const losses = parts[1] || 0;
-            const draws = parts[2] || 0;
-
-            headToHead[rowTeamCode][colTeamCode] = { wins, losses, draws };
-          }
-        });
-      });
-      console.log(`[parseStandings] Successfully parsed head-to-head table from page.`);
-    } else {
-      console.log(`[parseStandings] Head-to-head table not found on page. Falling back to default estimates.`);
-      // Set default estimate from wins ratio
-      for (const t1 of teamCodes) {
-        const t1Wins = teams.find(t => t.team === t1)?.wins || 30;
-        const t1Losses = teams.find(t => t.team === t1)?.losses || 30;
-        const t1Rate = t1Wins / (t1Wins + t1Losses || 1);
-
-        for (const t2 of teamCodes) {
-          if (t1 === t2) continue;
-          const t2Wins = teams.find(t => t.team === t2)?.wins || 30;
-          const t2Losses = teams.find(t => t.team === t2)?.losses || 30;
-          const t2Rate = t2Wins / (t2Wins + t2Losses || 1);
-
-          // We estimate they played around 8 games
-          const gamesPlayed = 8;
-          const ratio = t1Rate / (t1Rate + t2Rate || 1);
-          const wins = Math.round(gamesPlayed * ratio);
-          const losses = gamesPlayed - wins;
-
-          headToHead[t1][t2] = { wins, losses, draws: 0 };
-        }
+  // Find a line containing at least 7 team tokens to identify the column header order
+  let headerCodes: string[] = [];
+  for (const line of lines) {
+    const cleanLine = line.replace(/■/g, ' ■ ').replace(/\s+/g, ' ').trim();
+    const tokens = cleanLine.split(' ');
+    if (tokens.length >= 10 && tokens.length <= 12) {
+      const normCodes = tokens.map(t => normalizeTeamName(t));
+      const validCount = normCodes.filter(c => c !== 'UNKNOWN').length;
+      if (validCount >= 7) {
+        headerCodes = normCodes;
+        console.log(`[parseStandings] Found head-to-head header line in text: ${JSON.stringify(tokens)} -> mapped: ${JSON.stringify(headerCodes)}`);
+        break;
       }
     }
+  }
 
-    return {
-      asOfDate: dateStr,
-      source: 'official-kbo',
-      teams,
-      headToHead,
-    };
+  if (headerCodes.length === 0) {
+    console.log('[parseStandings] Head-to-head text header row not found.');
+    return null;
+  }
 
-  } catch (error: any) {
-    console.error(`[parseStandings] Parsing standings failed:`, error);
+  const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
+  const teamCodes = Object.keys(CONFIG.TEAMS);
+  for (const t1 of teamCodes) {
+    headToHead[t1] = {};
+    for (const t2 of teamCodes) {
+      if (t1 !== t2) headToHead[t1][t2] = { wins: 0, losses: 0, draws: 0 };
+    }
+  }
+
+  let rowMatches = 0;
+  for (const line of lines) {
+    const cleanLine = line.replace(/■/g, ' ■ ').replace(/\s+/g, ' ').trim();
+    const tokens = cleanLine.split(' ');
+    if (tokens.length < 8) continue;
+
+    const rowTeamCode = normalizeTeamName(tokens[0]);
+    if (rowTeamCode === 'UNKNOWN') continue;
+
+    rowMatches++;
+    tokens.forEach((token, cellIdx) => {
+      if (cellIdx === 0) return;
+      
+      const colTeamCode = headerCodes[cellIdx];
+      if (!colTeamCode || colTeamCode === 'UNKNOWN' || colTeamCode === rowTeamCode) return;
+
+      // Match W-L-D or W-L formats
+      const match = token.match(/^(\d+)[-–—/](\d+)(?:[-–—/](\d+))?$/);
+      if (match) {
+        const wins = parseInt(match[1]) || 0;
+        const losses = parseInt(match[2]) || 0;
+        const draws = parseInt(match[3]) || 0;
+        headToHead[rowTeamCode][colTeamCode] = { wins, losses, draws };
+      }
+    });
+  }
+
+  console.log(`[parseStandings] Text-based head-to-head parsed ${rowMatches} row entries.`);
+  return rowMatches >= 5 ? headToHead : null;
+}
+
+/**
+ * Populates estimated/fallback head-to-head records based on team win rates.
+ * 
+ * @param teams - List of StandingsTeam.
+ * @returns Estimated head-to-head record mapping.
+ */
+function getEstimatedHeadToHead(teams: StandingsTeam[]): Record<string, Record<string, { wins: number; losses: number; draws: number }>> {
+  console.log(`[parseStandings] [CALL] getEstimatedHeadToHead`);
+  const headToHead: Record<string, Record<string, { wins: number; losses: number; draws: number }>> = {};
+  const teamCodes = Object.keys(CONFIG.TEAMS);
+
+  for (const t1 of teamCodes) {
+    headToHead[t1] = {};
+    const t1Wins = teams.find(t => t.team === t1)?.wins || 30;
+    const t1Losses = teams.find(t => t.team === t1)?.losses || 30;
+    const t1Rate = t1Wins / (t1Wins + t1Losses || 1);
+
+    for (const t2 of teamCodes) {
+      if (t1 === t2) continue;
+      const t2Wins = teams.find(t => t.team === t2)?.wins || 30;
+      const t2Losses = teams.find(t => t.team === t2)?.losses || 30;
+      const t2Rate = t2Wins / (t2Wins + t2Losses || 1);
+
+      const gamesPlayed = 8;
+      const ratio = t1Rate / (t1Rate + t2Rate || 1);
+      const wins = Math.round(gamesPlayed * ratio);
+      const losses = gamesPlayed - wins;
+
+      headToHead[t1][t2] = { wins, losses, draws: 0 };
+    }
+  }
+  return headToHead;
+}
+
+/**
+ * Fetches and parses KBO standings with dual-parsing and robust fallback handling.
+ * 
+ * @param dateStr - Snapshot date (YYYY-MM-DD).
+ * @returns Standings and head-to-head record snapshot.
+ */
+export async function parseStandings(dateStr: string): Promise<KBOStandingsResult> {
+  console.log(`[parseStandings] [CALL] parseStandings - Date: "${dateStr}"`);
+
+  let rawHtml = '';
+  try {
+    rawHtml = await fetchKboPage(CONFIG.KBO_URLS.standings);
+  } catch (fetchError: any) {
+    console.error(`[parseStandings] Network fetch failed for standings page:`, fetchError);
     const fallback = getFallbackStandings(dateStr);
-    const msg = error?.message || String(error);
-    const errorType = (msg.includes('status') || msg.includes('fetch') || msg.includes('network') || msg.includes('connect'))
-      ? 'KBO fetch 실패'
-      : 'HTML parser 실패';
     return {
       ...fallback,
-      source: 'fallback-sample',
-      errorType,
-      errorMessage: msg,
+      errorType: 'KBO fetch 실패',
+      errorMessage: `KBO 공식 순위 페이지 다운로드 중 오류가 발생하여 내장 데이터로 보정합니다. (상세: ${fetchError.message})`
     };
   }
+
+  const $ = cheerio.load(rawHtml);
+  const plainText = $.text();
+
+  // Try Table parsing first
+  let teams = parseStandingsTable($);
+  let phase: 'tableParser' | 'textParser' | 'success' = 'tableParser';
+
+  if (!teams) {
+    console.warn(`[parseStandings] Cheerio table parsing failed. Running text parser fallback...`);
+    phase = 'textParser';
+    teams = parseStandingsText(plainText);
+  }
+
+  if (!teams) {
+    console.error(`[parseStandings] Both table and text parsing failed.`);
+    const fallback = getFallbackStandings(dateStr);
+    return {
+      ...fallback,
+      errorType: 'HTML parser 실패',
+      errorMessage: 'KBO 순위 페이지 형식 변경으로 파싱이 모두 실패하였습니다. 내장 데이터를 적용합니다.',
+    };
+  }
+
+  // Parse head-to-head records
+  let headToHead = parseHeadToHeadTable($);
+  if (!headToHead) {
+    console.warn(`[parseStandings] Head-to-head table parsing failed. Trying text-based head-to-head parser...`);
+    headToHead = parseHeadToHeadText(plainText);
+  }
+
+  if (!headToHead) {
+    console.warn(`[parseStandings] Head-to-head text parsing failed. Generating statistical estimates.`);
+    headToHead = getEstimatedHeadToHead(teams);
+  }
+
+  console.log(`[parseStandings] Successfully resolved standings. Source: official-kbo, Teams count: ${teams.length}`);
+
+  return {
+    asOfDate: dateStr,
+    source: 'official-kbo',
+    teams,
+    headToHead,
+  };
 }

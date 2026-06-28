@@ -6,8 +6,25 @@
 
 import { CONFIG } from '../../config';
 import { parseStandings } from './parseStandings';
-import { getSchedule } from './parseSchedule';
+import { getFullSeasonSchedule } from './parseSchedule';
 import { KBOStandingsResult, StandingsTeam, KBOGame } from '../../types';
+
+/**
+ * Returns the current date string in Asia/Seoul timezone (Korea Standard Time) in YYYY-MM-DD format.
+ * Used for precise date boundaries regardless of server container local clock.
+ * 
+ * @returns Date string formatted as YYYY-MM-DD.
+ */
+export function getKstDateString(): string {
+  const kstTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+  const d = new Date(kstTime);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const result = `${year}-${month}-${day}`;
+  console.log(`[buildSnapshotByDate] [CALL] getKstDateString - Resolved KST: "${result}"`);
+  return result;
+}
 
 /**
  * Rebuilds team standings and head-to-head records from scratch by accumulating game results from the schedule.
@@ -17,7 +34,7 @@ import { KBOStandingsResult, StandingsTeam, KBOGame } from '../../types';
  * @returns KBOStandingsResult containing standings and head-to-head records up to the snapshot date
  */
 export function reconstructStandingsFromSchedule(dateStr: string, allGames: KBOGame[]): KBOStandingsResult {
-  console.log(`[buildSnapshot] Reconstructing standings up to date: "${dateStr}" using ${allGames.length} season games`);
+  console.log(`[buildSnapshotByDate] [CALL] reconstructStandingsFromSchedule - Date: "${dateStr}" using ${allGames.length} season games`);
 
   const teamCodes = Object.keys(CONFIG.TEAMS);
   
@@ -40,7 +57,7 @@ export function reconstructStandingsFromSchedule(dateStr: string, allGames: KBOG
 
   // Filter games played on or before the snapshot date that are completed
   const playedGames = allGames.filter(g => g.date <= dateStr && g.status === 'completed');
-  console.log(`[buildSnapshot] Found ${playedGames.length} completed games played on or before ${dateStr}`);
+  console.log(`[buildSnapshotByDate] Reconstructed: Found ${playedGames.length} completed games played on or before ${dateStr}`);
 
   playedGames.forEach(g => {
     const { away, home, awayScore, homeScore } = g;
@@ -105,7 +122,6 @@ export function reconstructStandingsFromSchedule(dateStr: string, allGames: KBOG
   });
 
   // Assign ranks (handles ties gracefully)
-  let currentRank = 1;
   for (let idx = 0; idx < teamsList.length; idx++) {
     if (idx > 0) {
       const prev = teamsList[idx - 1];
@@ -119,12 +135,11 @@ export function reconstructStandingsFromSchedule(dateStr: string, allGames: KBOG
     } else {
       teamsList[idx].rank = 1;
     }
-    currentRank = idx + 1;
   }
 
   return {
     asOfDate: dateStr,
-    source: 'official-kbo', // Since we compiled from official schedule items
+    source: 'official-kbo', // Compiled from official schedule records
     teams: teamsList,
     headToHead,
   };
@@ -140,36 +155,36 @@ export function reconstructStandingsFromSchedule(dateStr: string, allGames: KBOG
  * @returns Standings and head-to-head records
  */
 export async function buildSnapshotByDate(dateStr: string, forceRefresh = false): Promise<KBOStandingsResult> {
-  console.log(`[buildSnapshot] buildSnapshotByDate called for date: "${dateStr}", Force Refresh: ${forceRefresh}`);
+  console.log(`[buildSnapshotByDate] [CALL] buildSnapshotByDate - Date: "${dateStr}", Force Refresh: ${forceRefresh}`);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getKstDateString();
 
-  // If selecting today, try to parse official standings first
-  if (dateStr === todayStr && !forceRefresh) {
+  // If selecting today (or future), try to parse official standings first
+  if (dateStr >= todayStr) {
     try {
-      console.log(`[buildSnapshot] Requested date is today. Attempting official KBO standings parse...`);
+      console.log(`[buildSnapshotByDate] Requested date is today or future ("${dateStr}"). Attempting official KBO standings parse...`);
       const standings = await parseStandings(dateStr);
-      if (standings.source === 'official-kbo') {
-        console.log(`[buildSnapshot] Successfully fetched live official standings.`);
+      if (standings.source === 'official-kbo' && standings.teams && standings.teams.length === 10) {
+        console.log(`[buildSnapshotByDate] Live official KBO standings parsed successfully with 10 teams. Returning immediately.`);
         return standings;
       }
+      console.warn(`[buildSnapshotByDate] parseStandings did not return official-kbo source or 10 teams. Received source: "${standings.source}". Falling back to schedule-based reconstruction.`);
     } catch (e) {
-      console.warn(`[buildSnapshot] Failed to parse live standings. Falling back to schedule reconstruction...`, e);
+      console.warn(`[buildSnapshotByDate] Failed to parse live standings. Falling back to schedule reconstruction...`, e);
     }
   }
 
   // Load the complete schedule (completed + scheduled) to reconstruct standings
   try {
-    const scheduleResult = await getSchedule(dateStr, forceRefresh);
-    // Note: getSchedule returns games starting from dateStr. We need the *full* schedule list
-    // to build past standings. So we fetch with '2026-03-01' (start of season) to get ALL games!
-    const startOfSeason = `${dateStr.substring(0, 4)}-03-01`;
-    const fullSchedule = await getSchedule(startOfSeason, forceRefresh);
+    const year = parseInt(dateStr.split('-')[0]) || 2026;
+    console.log(`[buildSnapshotByDate] Reconstructing standings for date "${dateStr}" using full season schedule for year ${year}...`);
     
-    const snapshot = reconstructStandingsFromSchedule(dateStr, fullSchedule.games);
+    // Call getFullSeasonSchedule directly as instructed, instead of legacy getSchedule
+    const fullSeasonGames = await getFullSeasonSchedule(year, forceRefresh);
+    const snapshot = reconstructStandingsFromSchedule(dateStr, fullSeasonGames);
     return snapshot;
   } catch (error) {
-    console.error(`[buildSnapshot] Failed to build snapshot from schedule:`, error);
+    console.error(`[buildSnapshotByDate] Failed to build snapshot from schedule:`, error);
     // Ultimate fallback is realistic dummy standings
     return {
       asOfDate: dateStr,
@@ -187,6 +202,8 @@ export async function buildSnapshotByDate(dateStr: string, forceRefresh = false)
         { team: 'KIWOOM', nameKo: '키움', games: 79, wins: 31, losses: 48, draws: 0, winRate: 0.392, rank: 10 },
       ],
       headToHead: {},
+      errorType: '샘플 데이터 사용',
+      errorMessage: `구단 및 일정 데이터베이스 복원 오류가 생겨 샘플 시뮬레이션 데이터를 제공합니다.`,
     };
   }
 }

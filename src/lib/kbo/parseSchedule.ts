@@ -8,12 +8,15 @@ import * as cheerio from 'cheerio';
 import { normalizeTeamName } from './normalizeTeamName';
 import { CONFIG } from '../../config';
 import { getCache, setCache } from './cache';
-
 import { KBOGame, KBOScheduleResult } from '../../types';
+import { fetchKboPage } from './fetchKboPage';
 
 /**
  * Parses a single matchup text cell into scores and team designations.
  * Uses robust regex and clean fallbacks.
+ * 
+ * @param text - The matchup cell text (e.g., "한화 5vs2 두산", "KIA vs 삼성 (우천취소)")
+ * @returns Parsed game results with team codes and scores.
  */
 export function parseMatchup(text: string): {
   away: string;
@@ -22,6 +25,7 @@ export function parseMatchup(text: string): {
   homeScore: number | null;
   status: 'completed' | 'scheduled' | 'postponed';
 } {
+  console.log(`[parseSchedule] [CALL] parseMatchup - Text: "${text}"`);
   const isPostponed = text.includes('취소') || text.includes('우천') || text.includes('연기') || text.includes('POSTPONED');
   
   // Remove multiple spaces and parentheses contents for cleaning
@@ -85,9 +89,11 @@ export function parseMatchup(text: string): {
  * It schedules 144 games per team (16 games against each of the other 9 teams).
  * Total matches = 10 * 144 / 2 = 720 matches.
  * Matches span from 2026-03-22 to 2026-09-30.
+ * 
+ * @returns Deterministic fallback season games array.
  */
 export function generateFallbackSchedule(): KBOGame[] {
-  console.log('[parseSchedule] Generating 720-game realistic fallback schedule...');
+  console.log('[parseSchedule] [CALL] generateFallbackSchedule - Generating 720-game realistic fallback schedule...');
   const teams = Object.keys(CONFIG.TEAMS);
   const games: KBOGame[] = [];
   
@@ -214,8 +220,67 @@ export function generateFallbackSchedule(): KBOGame[] {
     matchDay++;
   }
 
-  console.log(`[parseSchedule] Generated ${games.length} games for fallback schedule database.`);
+  console.log(`[parseSchedule] Generated ${games.length} fallback games.`);
   return games;
+}
+
+/**
+ * Parses the HTML matchup string from KBO AJAX service into scores and teams.
+ * 
+ * @param html - Matchup HTML string (e.g. "<span>LG</span><em><span class=\"win\">8</span><span>vs</span><span class=\"lose\">5</span></em><span>두산</span>")
+ * @returns Parsed game results with team names, scores, and completion status.
+ */
+function parsePlayText(html: string): {
+  away: string;
+  awayScore: number | null;
+  home: string;
+  homeScore: number | null;
+  status: 'completed' | 'scheduled' | 'postponed';
+} {
+  console.log(`[parseSchedule] [CALL] parsePlayText - HTML length: ${html.length}`);
+  const $ = cheerio.load(`<div>${html}</div>`);
+  
+  // Find spans that are NOT inside 'em'
+  const teamSpans = $('span').not('em span').map((_, el) => $(el).text().trim()).get().filter(Boolean);
+  
+  const away = teamSpans[0] || '';
+  const home = teamSpans[1] || '';
+
+  // Extract scores if they exist
+  const em = $('em');
+  const emText = em.text().trim();
+  const isPostponed = html.includes('취소') || html.includes('우천') || html.includes('연기');
+
+  let awayScore: number | null = null;
+  let homeScore: number | null = null;
+  let status: 'completed' | 'scheduled' | 'postponed' = 'scheduled';
+
+  if (isPostponed) {
+    status = 'postponed';
+  } else {
+    // Check if there are scores inside em
+    const numbers = em.find('span').map((_, el) => {
+      const txt = $(el).text().trim();
+      return /^\d+$/.test(txt) ? parseInt(txt) : null;
+    }).get().filter(v => v !== null) as number[];
+
+    if (numbers.length >= 2) {
+      status = 'completed';
+      awayScore = numbers[0];
+      homeScore = numbers[1];
+    } else {
+      const match = emText.match(/(\d+)\s*(?:vs|VS|:)\s*(\d+)/);
+      if (match) {
+        status = 'completed';
+        awayScore = parseInt(match[1]);
+        homeScore = parseInt(match[2]);
+      } else {
+        status = 'scheduled';
+      }
+    }
+  }
+
+  return { away, awayScore, home, homeScore, status };
 }
 
 /**
@@ -226,6 +291,7 @@ export function generateFallbackSchedule(): KBOGame[] {
  * @returns Array of games parsed from the page.
  */
 async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGame[]> {
+  console.log(`[parseSchedule] [CALL] parseKboMonthSchedule - Year: ${year}, Month: ${month}`);
   const monthStr = month.toString().padStart(2, '0');
   const cacheKey = `schedule_${year}_${monthStr}`;
   
@@ -237,76 +303,79 @@ async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGa
   const ttl = isPastMonth ? 30 * 24 * 60 * 60 * 1000 : CONFIG.CACHE.ttlTodayMs;
 
   const cached = await getCache<KBOGame[]>(cacheKey, ttl);
-  if (cached) {
+  if (cached && cached.length > 0) {
     console.log(`[parseSchedule] Returning cached schedule for ${year}-${monthStr}`);
     return cached;
   }
 
-  console.log(`[parseSchedule] Fetching fresh KBO monthly schedule from web for ${year}-${monthStr}`);
+  console.log(`[parseSchedule] Fetching fresh KBO monthly schedule from AJAX web service for ${year}-${monthStr}`);
   const games: KBOGame[] = [];
-  const url = `${CONFIG.KBO_URLS.koreanSchedule}?seriesId=1&month=${monthStr}&year=${year}`;
+  const url = 'https://www.koreabaseball.com/ws/Schedule.asmx/GetScheduleList';
 
   try {
+    const params = new URLSearchParams();
+    params.append('leId', '1');
+    params.append('srIdList', '0,9,6'); // Regular season
+    params.append('seasonId', year.toString());
+    params.append('gameMonth', monthStr);
+    params.append('teamId', '');
+
     const response = await fetch(url, {
+      method: 'POST',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-      }
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://www.koreabaseball.com/Schedule/Schedule.aspx',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: params.toString()
     });
 
     if (!response.ok) {
-      throw new Error(`KBO Schedule Server returned status ${response.status}`);
+      throw new Error(`HTTP status error: ${response.status} ${response.statusText}`);
     }
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
-
-    // Find the schedule table. It's usually the main table or inside `.tbl-type1`
-    let scheduleTable = $('table').first();
-    $('table').each((_i, elem) => {
-      const headers = $(elem).find('thead th').text().trim();
-      if (headers.includes('날짜') && headers.includes('경기')) {
-        scheduleTable = $(elem);
-      }
-    });
+    const data = await response.json();
+    if (!data || !data.rows) {
+      throw new Error('Invalid or empty response from KBO schedule web service');
+    }
 
     let currentDayStr = '';
 
-    scheduleTable.find('tbody tr').each((_i, row) => {
-      const cells = $(row).find('td');
-      if (cells.length === 0) return;
+    for (const rowObj of data.rows) {
+      const cells = rowObj.row;
+      if (!cells || cells.length === 0) continue;
 
-      // Extract date if present, otherwise reuse active date (due to rowspans)
-      const dateCell = $(row).find('td.day, td:nth-child(1)');
-      const dateText = dateCell.length > 0 ? dateCell.text().trim() : '';
-      
-      if (dateText && dateText.includes('.')) {
-        // format is "04.01(수)" or "04.01"
+      // Find if there is a day cell
+      const dayCell = cells.find((c: any) => c.Class && c.Class.includes('day'));
+      if (dayCell) {
+        const dateText = cheerio.load(dayCell.Text).text().trim();
         const dateMatch = dateText.match(/(\d{2})\.(\d{2})/);
         if (dateMatch) {
           currentDayStr = `${year}-${dateMatch[1]}-${dateMatch[2]}`;
         }
       }
 
-      // If we don't have a date yet, we skip
-      if (!currentDayStr) return;
+      if (!currentDayStr) continue;
 
-      // Map columns
-      // If date was present, columns shift by 1. Check if dateCell has rowspan or is present
-      const hasDateInRow = dateText !== '';
-      const offset = hasDateInRow ? 1 : 0;
+      const hasDate = !!dayCell;
+      const offset = hasDate ? 1 : 0;
 
-      const timeText = $(cells[offset]).text().trim();
-      const playText = $(cells[offset + 1]).text().trim(); // Matchup, e.g. "한화vs두산"
-      const stadiumText = $(cells[offset + 2]).text().trim();
+      const timeCell = cells[offset];
+      const playCell = cells[offset + 1];
+      const stadiumCell = cells[offset + 6];
 
-      if (!playText || !timeText) return;
+      if (!timeCell || !playCell) continue;
 
-      const parsedPlay = parseMatchup(playText);
+      const timeText = cheerio.load(timeCell.Text).text().trim();
+      const playHtml = playCell.Text;
+      const stadiumText = stadiumCell ? cheerio.load(stadiumCell.Text).text().trim() : '';
+
+      const parsedPlay = parsePlayText(playHtml);
       const awayCode = normalizeTeamName(parsedPlay.away);
       const homeCode = normalizeTeamName(parsedPlay.home);
 
-      if (awayCode === 'UNKNOWN' || homeCode === 'UNKNOWN') return;
+      if (awayCode === 'UNKNOWN' || homeCode === 'UNKNOWN') continue;
 
       games.push({
         date: currentDayStr,
@@ -318,7 +387,7 @@ async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGa
         stadium: stadiumText,
         status: parsedPlay.status,
       });
-    });
+    }
 
     console.log(`[parseSchedule] Successfully parsed ${games.length} games for ${year}-${monthStr}`);
     
@@ -328,82 +397,94 @@ async function parseKboMonthSchedule(year: number, month: number): Promise<KBOGa
 
   } catch (error) {
     console.error(`[parseSchedule] Error fetching monthly schedule for ${year}-${monthStr}:`, error);
-    // In case of error, return empty so it can fallback to local generation
+    // In case of error, return empty so it can fallback to local generation or other months
     return [];
   }
 }
 
 /**
- * Gets the schedule of the season starting from the specified date.
- * Compiles the entire season from caches/web and splits into remaining scheduled, completed, and unresolved games.
+ * Fetches the entire KBO regular season schedule (months 3 to 10).
+ * Handles partial failures gracefully by downloading concurrently via Promise.allSettled.
  * 
- * @param fromDateStr - The reference date in YYYY-MM-DD format.
- * @param forceRefresh - If true, clears the cache and refetches.
- * @returns KBOScheduleResult containing upcoming schedule and unresolved games.
+ * @param year - Target year to fetch.
+ * @param forceRefresh - If true, ignores the local cache and forces fresh download.
+ * @returns Array of KBO regular season games.
  */
-export async function getSchedule(fromDateStr: string, forceRefresh = false): Promise<KBOScheduleResult> {
-  console.log(`[getSchedule] Fetching full schedule starting from: "${fromDateStr}". Force refresh: ${forceRefresh}`);
+export async function getFullSeasonSchedule(year: number, forceRefresh = false): Promise<KBOGame[]> {
+  console.log(`[parseSchedule] [CALL] getFullSeasonSchedule - Year: ${year}, Force Refresh: ${forceRefresh}`);
 
   if (forceRefresh) {
-    // Clear cache if forced
-    console.log(`[getSchedule] Force refresh enabled. Clearing local caches.`);
-    const today = new Date();
-    const year = today.getFullYear();
+    console.log(`[parseSchedule] Force refresh: purging schedule cache for months 3-10.`);
     for (let m = 3; m <= 10; m++) {
       const monthStr = m.toString().padStart(2, '0');
-      // Set to null to evict
       await setCache(`schedule_${year}_${monthStr}`, null);
     }
   }
 
-  // Parse all months in regular season (March to October)
-  const today = new Date(fromDateStr);
-  const year = today.getFullYear();
-  let allGames: KBOGame[] = [];
-  let fetchedAny = false;
-  let cachedAny = false;
+  const months = Array.from({ length: 8 }, (_, i) => i + 3); // 3 to 10
+  const promises = months.map(m => parseKboMonthSchedule(year, m));
 
-  for (let m = 3; m <= 10; m++) {
-    const monthStr = m.toString().padStart(2, '0');
-    const cached = await getCache<KBOGame[]>(`schedule_${year}_${monthStr}`, 30 * 24 * 60 * 60 * 1000);
-    if (cached) {
-      cachedAny = true;
+  const results = await Promise.allSettled(promises);
+  const allGames: KBOGame[] = [];
+  let successfulMonthsCount = 0;
+
+  results.forEach((res, idx) => {
+    const monthVal = idx + 3;
+    if (res.status === 'fulfilled') {
+      const games = res.value;
+      if (games && games.length > 0) {
+        allGames.push(...games);
+        successfulMonthsCount++;
+      } else {
+        console.log(`[parseSchedule] Month ${monthVal} has no scheduled games in our record.`);
+      }
     } else {
-      fetchedAny = true;
+      console.error(`[parseSchedule] Month ${monthVal} fetching rejected:`, res.reason);
     }
-    const monthGames = await parseKboMonthSchedule(year, m);
-    allGames.push(...monthGames);
+  });
+
+  console.log(`[parseSchedule] Completed parallel schedule retrieval. Successful months: ${successfulMonthsCount}/8. Total games fetched: ${allGames.length}`);
+
+  if (allGames.length === 0) {
+    console.log(`[parseSchedule] Crawled 0 games overall. Engaging fallback database generator...`);
+    return generateFallbackSchedule();
   }
+
+  return allGames;
+}
+
+/**
+ * Gets the remaining upcoming schedule after the reference date and unresolved postponed games.
+ * 
+ * @param fromDateStr - Reference date in YYYY-MM-DD format.
+ * @param forceRefresh - If true, clears the cache and refetches.
+ * @returns KBOScheduleResult containing upcoming scheduled matches and unresolved synthetic games.
+ */
+export async function getRemainingSchedule(fromDateStr: string, forceRefresh = false): Promise<KBOScheduleResult> {
+  console.log(`[parseSchedule] [CALL] getRemainingSchedule - Date: "${fromDateStr}", Force Refresh: ${forceRefresh}`);
+
+  const refDate = new Date(fromDateStr);
+  const year = refDate.getFullYear();
+
+  // Load the complete schedule (completed, scheduled, postponed)
+  const allGames = await getFullSeasonSchedule(year, forceRefresh);
 
   let source = 'official-kbo';
   let errorType: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용' | undefined = undefined;
   let errorMessage: string | undefined = undefined;
 
-  // Fallback if we crawled absolutely nothing (e.g. offline/blocked)
-  if (allGames.length === 0) {
-    console.log(`[getSchedule] Crawled 0 games from official KBO web. Engaging fallback database generator...`);
-    allGames = generateFallbackSchedule();
+  // Detect fallback sources
+  const isFallback = allGames.some(g => g.stadium === 'NEUTRAL' || g.synthetic) || allGames.length === 720; // fallback has 720 games
+  if (isFallback) {
     source = 'fallback-sample';
     errorType = '샘플 데이터 사용';
     errorMessage = '공식 일정을 가져올 수 없어 내장 샘플 일정을 사용합니다.';
-  } else if (cachedAny && !fetchedAny) {
-    errorType = '캐시 데이터 사용';
   }
 
-  // Now, process games based on fromDateStr
-  // 1. Upcoming matches: scheduled games after fromDateStr
+  // 1. Upcoming matches: scheduled games *after* fromDateStr
   const upcomingGames = allGames.filter(g => g.date > fromDateStr && g.status === 'scheduled');
 
   // 2. Unresolved games: matches that are POSTPONED/CANCELLED but not played up to this point
-  // Note: in KBO, cancelled games are re-scheduled at the end of the season.
-  // If we have postponed games that are not re-scheduled yet, we can identify them.
-  // Let's filter games with status === 'postponed' on or before fromDateStr.
-  const postponedGames = allGames.filter(g => g.date <= fromDateStr && g.status === 'postponed');
-
-  // To prevent double counting, if a postponed game has already been re-scheduled and completed or listed in future, we don't include it.
-  // How do we match? We check head-to-head match counts.
-  // Each pair of teams plays exactly 16 games.
-  // Let's count how many total scheduled + completed games exist in our dataset for each team matchup (A vs B).
   const matchupCounts: Record<string, number> = {};
   const getKey = (t1: string, t2: string) => [t1, t2].sort().join('_');
 
@@ -414,8 +495,6 @@ export async function getSchedule(fromDateStr: string, forceRefresh = false): Pr
     }
   });
 
-  // If total games scheduled/played between two teams is less than 16, there are "unresolved/cancelled" games
-  // that KBO has not re-scheduled in the official calendar yet.
   const unresolvedGames: KBOGame[] = [];
   const teams = Object.keys(CONFIG.TEAMS);
 
@@ -428,10 +507,10 @@ export async function getSchedule(fromDateStr: string, forceRefresh = false): Pr
       const missingCount = CONFIG.SIMULATION.unresolvedGameCorrectionBase - scheduledPlayedCount;
 
       if (missingCount > 0) {
-        console.log(`[getSchedule] Matchup conflict: ${t1} vs ${t2} has only ${scheduledPlayedCount} scheduled/played. Creating ${missingCount} unresolved games.`);
+        console.log(`[parseSchedule] Unresolved conflict found: ${t1} vs ${t2} has only ${scheduledPlayedCount}/${CONFIG.SIMULATION.unresolvedGameCorrectionBase}. Adding ${missingCount} synthetic games.`);
         for (let k = 0; k < missingCount; k++) {
           unresolvedGames.push({
-            date: '2026-10-15', // Put at typical regular season completion date
+            date: '2026-10-15',
             time: '18:30',
             away: t1,
             home: t2,
@@ -455,4 +534,16 @@ export async function getSchedule(fromDateStr: string, forceRefresh = false): Pr
     errorType,
     errorMessage,
   };
+}
+
+/**
+ * Backwards compatible delegate to getRemainingSchedule.
+ * 
+ * @param fromDateStr - The reference date.
+ * @param forceRefresh - If true, clears the cache and refetches.
+ * @returns KBOScheduleResult.
+ */
+export async function getSchedule(fromDateStr: string, forceRefresh = false): Promise<KBOScheduleResult> {
+  console.log(`[parseSchedule] [CALL] getSchedule (Legacy wrapper) - Delegating to getRemainingSchedule`);
+  return getRemainingSchedule(fromDateStr, forceRefresh);
 }
