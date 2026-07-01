@@ -98,6 +98,11 @@ The UI is built with desktop-first precision using **React 19**, styled with cus
 *   **Type Safety**: Every shared interface, enum, and class payload is defined in `/src/types.ts` to ensure strict contract mapping.
 *   **Lazy Initialization & Fault-Tolerance**: All web scraper selectors are wrapped in try-catch structures, and division operations are guarded against division-by-zero errors.
 *   **Exhaustive Telemetry Logs**: Function executions, database state modifications, and user interactive actions are comprehensively logged to the console to enable easy debugging.
+*   **Robust Date Normalization & Partial Failure Isolation**:
+    *   **Centralized KST Date Utilities (`/src/lib/kbo/dateUtils.ts`)**: Implements strict `Asia/Seoul` timezone normalization using `Intl.DateTimeFormat`. Eliminates client-server UTC offset drift and ensures that KBO dates are consistently formatted as `YYYY-MM-DD` and converted to `YYYYMMDD` without shifting.
+    *   **Isolated API Error Boundaries**: Isolates the frontend fetching state for Team Standings and Today's Games. An API failure or data parsing glitch in the standings feed is contained within the standings tab view, preventing a total app crash and keeping the daily game scheduling/prediction board completely operational.
+    *   **Cache Eviction on Failure**: API handlers explicitly configure `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` for any failed operations (`success: false`). Genuine game-less days are safely cached with a standard TTL, while temporary serverless crawl hiccups are cleared instantly on reload.
+
 
 ---
 

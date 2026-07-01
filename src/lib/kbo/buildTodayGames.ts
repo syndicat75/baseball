@@ -1,31 +1,13 @@
 /**
  * @file buildTodayGames.ts
  * @description KBO 당일 경기 일정 데이터를 구단별 디폴트 프로필(선발투수 정보, 타선 라인업 등)과 연결하고,
- * 규칙 기반 예측 모델을 가동하여 완전한 형태의 TodayGame 구조체 목록을 생산해내는 가공 엔진입니다.
+ * 규칙 기반 예측 모델을 가동하여 완전한 형태 of TodayGame 구조체 목록을 생산해내는 가공 엔진입니다.
  */
 
 import { KBOGame, TodayGame, PitcherStats, BatterLineup, GamePrediction } from '../../types';
 import { KBO_TEAM_PROFILES } from '../../kboConfig';
 import { generatePrediction } from './predictionEngine';
-
-/**
- * @function getKstDateString
- * @description 현재 서버 시간을 바탕으로 한국 표준시(KST, UTC+9) 기준 YYYY-MM-DD 날짜 문자열을 반환합니다.
- * @returns {string} KST 날짜 문자열 (예: "2026-07-01")
- */
-export function getKstDateString(): string {
-  console.log('[buildTodayGames] [CALL] getKstDateString - Computing current KST date.');
-  const d = new Date();
-  const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-  const kstOffset = 9 * 60 * 60 * 1000;
-  const kstDate = new Date(utc + kstOffset);
-  const yyyy = kstDate.getFullYear();
-  const mm = String(kstDate.getMonth() + 1).padStart(2, '0');
-  const dd = String(kstDate.getDate()).padStart(2, '0');
-  const result = `${yyyy}-${mm}-${dd}`;
-  console.log(`[buildTodayGames] [RESULT] getKstDateString - Computed KST Date: ${result}`);
-  return result;
-}
+import { getKoreaTodayString } from './dateUtils';
 
 /**
  * @function buildTodayGames
@@ -37,7 +19,7 @@ export function getKstDateString(): string {
 export function buildTodayGames(kboData: any, targetDate?: string): TodayGame[] {
   console.log(`[buildTodayGames] [CALL] buildTodayGames - date: "${targetDate || 'KST Today'}"`);
   
-  const todayStr = targetDate || getKstDateString();
+  const todayStr = targetDate || getKoreaTodayString();
   const completed = kboData.completedGames || [];
   const remaining = kboData.remainingGames || [];
   const standings = kboData.standings || [];
@@ -48,6 +30,7 @@ export function buildTodayGames(kboData: any, targetDate?: string): TodayGame[] 
   // 지정된 날짜의 경기 필터링
   const rawTodayGames = allGames.filter(g => g.date === todayStr);
   console.log(`[buildTodayGames] Found ${rawTodayGames.length} games for date: ${todayStr}`);
+
 
   const todayGamesList: TodayGame[] = rawTodayGames.map((g, index) => {
     const gameId = `kbo-game-${todayStr}-${g.away}-${g.home}`;

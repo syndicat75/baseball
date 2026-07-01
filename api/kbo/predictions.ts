@@ -8,20 +8,29 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fallbackSource } from '../../src/lib/kbo/sources/fallbackSource';
-import { buildTodayGames, getKstDateString } from '../../src/lib/kbo/buildTodayGames';
+import { buildTodayGames } from '../../src/lib/kbo/buildTodayGames';
+import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
 
-/**
- * @function handler
- * @description /api/kbo/predictions 요청을 처리하여 승부예측 목록을 반환합니다.
- * @param {VercelRequest} req 요청 객체
- * @param {VercelResponse} res 응답 객체
- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { date } = req.query;
-  console.log(`[api/kbo/predictions] [CALL] handler - date: "${date}"`);
+  console.log(`[api/kbo/predictions] [CALL] handler - date param: "${date}"`);
 
-  const todayStr = getKstDateString();
+  const todayStr = getKoreaTodayString();
   const targetDate = (date as string) || todayStr;
+  const kboDateStr = toKboDate(targetDate);
+
+  // 1. 날짜형식 엄격성 검증
+  if (!isValidDateString(targetDate)) {
+    console.error(`[api/kbo/predictions] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    return res.status(400).json({
+      success: false,
+      date: targetDate,
+      kboDate: kboDateStr,
+      predictions: [],
+      error: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+    });
+  }
 
   try {
     let safeDirname = '';
@@ -32,6 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const findDataPath = (fileName: string): string | null => {
+      console.log(`[api/kbo/predictions] [CALL] findDataPath for: "${fileName}"`);
       const candidates = [
         path.join(process.cwd(), 'public', 'data', fileName),
         path.join(process.cwd(), 'data', fileName),
@@ -44,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ];
       for (const p of candidates) {
         if (fs.existsSync(p)) {
-          console.log(`[api/kbo/predictions] Found ${fileName} at: ${p}`);
+          console.log(`[api/kbo/predictions] Found file at: ${p}`);
           return p;
         }
       }
@@ -95,20 +105,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=300');
 
     const response = {
+      success: true,
       source: 'prediction-engine',
       sourceLabel: '경기 승률 분석 예측 모델',
       asOfDate: kboData.asOfDate || todayStr,
       targetDate,
+      kboDate: kboDateStr,
       fetchedAt: kboData.fetchedAt || new Date().toISOString(),
       predictions,
     };
 
+    console.log(`[api/kbo/predictions] [SUCCESS] Compiled ${predictions.length} predictions for ${targetDate}`);
     return res.status(200).json(response);
   } catch (err: any) {
-    console.error('[api/kbo/predictions] 예측 정보 산출 실패:', err);
+    console.error('[api/kbo/predictions] [ERROR] 예측 정보 산출 실패:', err);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     return res.status(500).json({
-      error: 'Game predictions load failure',
+      success: false,
+      date: targetDate,
+      kboDate: kboDateStr,
+      predictions: [],
+      error: '경기 승률 예측 데이터를 로드하거나 연산하는 데 실패했습니다.',
       details: err.message,
     });
   }
 }
+

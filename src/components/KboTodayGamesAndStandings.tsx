@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import { CONFIG } from '../config';
 import { TeamStanding, TodayGame } from '../types';
+import { getKoreaTodayString, isValidDateString } from '../lib/kbo/dateUtils';
 import { 
   Calendar, 
   ChevronDown, 
@@ -25,29 +26,10 @@ import {
   CheckCircle2
 } from 'lucide-react';
 
-/**
- * @function getKstDateString
- * @description 한국 표준시(KST) 기준 YYYY-MM-DD 날짜 문자열을 산출합니다.
- * @returns {string} KST 날짜 문자열
- */
-function getKstDateString(): string {
-  console.log('[KboTodayGamesAndStandings] [CALL] getKstDateString - Resolving today date.');
-  const d = new Date();
-  const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-  const kstOffset = 9 * 60 * 60 * 1000;
-  const kstDate = new Date(utc + kstOffset);
-  const yyyy = kstDate.getFullYear();
-  const mm = String(kstDate.getMonth() + 1).padStart(2, '0');
-  const dd = String(kstDate.getDate()).padStart(2, '0');
-  const result = `${yyyy}-${mm}-${dd}`;
-  console.log(`[KboTodayGamesAndStandings] [RESULT] getKstDateString - Computed: "${result}"`);
-  return result;
-}
-
 export function KboTodayGamesAndStandings() {
   console.log('[KboTodayGamesAndStandings] [CALL] Render component');
 
-  const todayKst = getKstDateString();
+  const todayKst = getKoreaTodayString();
 
   // 상태값 설정
   const [targetDate, setTargetDate] = useState<string>(todayKst);
@@ -60,7 +42,11 @@ export function KboTodayGamesAndStandings() {
   const [isGamesLoading, setIsGamesLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // 격리된 에러 상태 관리 (부분 실패 처리를 위한 장치)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null); // 글로벌 에러 (수동 갱신 등)
+  const [standingsError, setStandingsError] = useState<string | null>(null); // 순위표 전용 에러
+  const [gamesError, setGamesError] = useState<string | null>(null); // 경기일정 전용 에러
+
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
   
@@ -74,17 +60,22 @@ export function KboTodayGamesAndStandings() {
   const fetchStandingsData = async (dateStr: string) => {
     console.log(`[KboTodayGamesAndStandings] [CALL] fetchStandingsData - date: "${dateStr}"`);
     setIsStandingsLoading(true);
+    setStandingsError(null);
     try {
       const res = await fetch(`/api/kbo/standings?date=${dateStr}`);
-      if (!res.ok) throw new Error(`서버 응답 오류 (상태: ${res.status})`);
       const data = await res.json();
+      
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `서버 응답 오류 (상태: ${res.status})`);
+      }
+      
       if (data && data.standings) {
         setStandings(data.standings);
         console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchStandingsData - Mapped ${data.standings.length} standings.`);
       }
     } catch (err: any) {
       console.error('[KboTodayGamesAndStandings] fetchStandingsData 실패:', err);
-      setErrorMsg(`순위표 데이터를 수집하지 못했습니다: ${err.message}`);
+      setStandingsError(`순위표 데이터를 수집하지 못했습니다: ${err.message}`);
     } finally {
       setIsStandingsLoading(false);
     }
@@ -97,10 +88,15 @@ export function KboTodayGamesAndStandings() {
   const fetchTodayGamesData = async (dateStr: string) => {
     console.log(`[KboTodayGamesAndStandings] [CALL] fetchTodayGamesData - date: "${dateStr}"`);
     setIsGamesLoading(true);
+    setGamesError(null);
     try {
       const res = await fetch(`/api/kbo/today-games?date=${dateStr}`);
-      if (!res.ok) throw new Error(`서버 응답 오류 (상태: ${res.status})`);
       const data = await res.json();
+      
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `서버 응답 오류 (상태: ${res.status})`);
+      }
+
       if (data && data.games) {
         setGames(data.games);
         console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${data.games.length} games.`);
@@ -114,7 +110,7 @@ export function KboTodayGamesAndStandings() {
       }
     } catch (err: any) {
       console.error('[KboTodayGamesAndStandings] fetchTodayGamesData 실패:', err);
-      setErrorMsg(`경기 일정 데이터를 수집하지 못했습니다: ${err.message}`);
+      setGamesError(`경기 일정 데이터를 수집하지 못했습니다: ${err.message}`);
     } finally {
       setIsGamesLoading(false);
     }
@@ -122,18 +118,20 @@ export function KboTodayGamesAndStandings() {
 
   /**
    * @function handleManualRefresh
-   * @description 실시간 수집기인 /api/kbo/refresh 를 직접 격발하여 최신 데이터를 크롤링하고 수집합니다.
+   * @description 실시간 수집기인 /api/kbo/refresh?date=... 를 직접 격발하여 최신 데이터를 크롤링하고 수집합니다.
    */
   const handleManualRefresh = async () => {
-    console.log('[KboTodayGamesAndStandings] [CALL] handleManualRefresh - Requesting server crawl.');
+    console.log(`[KboTodayGamesAndStandings] [CALL] handleManualRefresh - Requesting server crawl for date: "${targetDate}"`);
     if (isRefreshing || cooldownRemaining > 0) return;
     
     setIsRefreshing(true);
     setErrorMsg(null);
+    setStandingsError(null);
+    setGamesError(null);
     setRefreshMessage(null);
 
     try {
-      const res = await fetch('/api/kbo/refresh');
+      const res = await fetch(`/api/kbo/refresh?date=${targetDate}`);
       const data = await res.json();
       
       if (res.status === 429) {
@@ -144,8 +142,8 @@ export function KboTodayGamesAndStandings() {
         return;
       }
 
-      if (!res.ok) {
-        throw new Error(data.message || '수동 갱신 실행 중 오류 발생');
+      if (!res.ok || data.success === false) {
+        throw new Error(data.message || data.error || '수동 갱신 실행 중 오류 발생');
       }
 
       console.log('[KboTodayGamesAndStandings] Server re-crawled successfully.');
@@ -348,7 +346,31 @@ export function KboTodayGamesAndStandings() {
         {activeTab === 'games' && !isGamesLoading && (
           <div className="space-y-4">
             
-            {games.length === 0 ? (
+            {gamesError ? (
+              <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-3">
+                <div className="flex items-start gap-3 text-rose-800">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold">경기 일정 데이터를 불러오지 못했습니다.</p>
+                    <p className="text-xs text-rose-600 font-semibold leading-relaxed">{gamesError}</p>
+                  </div>
+                </div>
+                <div className="pt-1 flex items-center gap-2">
+                  <button 
+                    onClick={() => fetchTodayGamesData(targetDate)}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition-all cursor-pointer"
+                  >
+                    일정 다시 불러오기
+                  </button>
+                  <button 
+                    onClick={handleManualRefresh}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-950 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition-all cursor-pointer"
+                  >
+                    KBO 공식 사이트 실시간 크롤링 시도
+                  </button>
+                </div>
+              </div>
+            ) : games.length === 0 ? (
               <div className="py-12 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-xl space-y-1">
                 <Calendar className="w-8 h-8 mx-auto text-slate-300 mb-2" />
                 <p className="text-sm font-bold text-slate-600">선택하신 날짜({targetDate})에는 예정된 KBO 경기가 존재하지 않습니다.</p>
@@ -651,108 +673,134 @@ export function KboTodayGamesAndStandings() {
 
         {/* Tab 2: 실시간 현재 팀 순위표 */}
         {activeTab === 'standings' && !isStandingsLoading && (
-          <div className="overflow-x-auto border border-slate-150 rounded-xl shadow-inner bg-white">
-            
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider font-sans border-b border-slate-800">
-                  <th className="p-3.5 text-center w-12">순위</th>
-                  <th className="p-3.5 w-24">구단명</th>
-                  <th className="p-3.5 text-center w-16">경기수</th>
-                  <th className="p-3.5 text-center w-14">승</th>
-                  <th className="p-3.5 text-center w-14">패</th>
-                  <th className="p-3.5 text-center w-14">무</th>
-                  <th className="p-3.5 text-center w-18">승률</th>
-                  <th className="p-3.5 text-center w-18">게임차</th>
-                  <th className="p-3.5 text-center w-24">최근 10경기</th>
-                  <th className="p-3.5 text-center w-18">연승/연패</th>
-                  <th className="p-3.5 text-center w-24">득점/실점</th>
-                </tr>
-              </thead>
-              <tbody>
-                {standings.length > 0 ? (
-                  standings.map((team, idx) => {
-                    const isTop5 = team.rank <= 5;
-                    const code = team.teamName; // e.g. LG, SAMSUNG
+          <div className="space-y-4">
+            {standingsError ? (
+              <div className="p-6 bg-rose-50 border border-rose-200 rounded-xl space-y-3">
+                <div className="flex items-start gap-3 text-rose-800">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-bold">순위표 데이터를 불러오지 못했습니다.</p>
+                    <p className="text-xs text-rose-600 font-semibold leading-relaxed">{standingsError}</p>
+                  </div>
+                </div>
+                <div className="pt-1 flex items-center gap-2">
+                  <button 
+                    onClick={() => fetchStandingsData(targetDate)}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition-all cursor-pointer"
+                  >
+                    순위표 다시 불러오기
+                  </button>
+                  <button 
+                    onClick={handleManualRefresh}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-950 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition-all cursor-pointer"
+                  >
+                    KBO 공식 사이트 실시간 크롤링 시도
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-150 rounded-xl shadow-inner bg-white">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider font-sans border-b border-slate-800">
+                      <th className="p-3.5 text-center w-12">순위</th>
+                      <th className="p-3.5 w-24">구단명</th>
+                      <th className="p-3.5 text-center w-16">경기수</th>
+                      <th className="p-3.5 text-center w-14">승</th>
+                      <th className="p-3.5 text-center w-14">패</th>
+                      <th className="p-3.5 text-center w-14">무</th>
+                      <th className="p-3.5 text-center w-18">승률</th>
+                      <th className="p-3.5 text-center w-18">게임차</th>
+                      <th className="p-3.5 text-center w-24">최근 10경기</th>
+                      <th className="p-3.5 text-center w-18">연승/연패</th>
+                      <th className="p-3.5 text-center w-24">득점/실점</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {standings.length > 0 ? (
+                      standings.map((team, idx) => {
+                        const isTop5 = team.rank <= 5;
+                        const code = team.teamName; // e.g. LG, SAMSUNG
 
-                    return (
-                      <tr 
-                        key={idx}
-                        className={`border-b border-slate-100 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors ${
-                          isTop5 ? 'bg-emerald-50/10 font-bold' : ''
-                        }`}
-                      >
-                        {/* Rank */}
-                        <td className="p-3.5 text-center">
-                          <span className={`inline-flex items-center justify-center w-5.5 h-5.5 rounded-full text-xs font-black ${
-                            team.rank === 1 ? 'bg-amber-500 text-white' :
-                            team.rank === 2 ? 'bg-slate-400 text-white' :
-                            team.rank === 3 ? 'bg-amber-700 text-white' :
-                            isTop5 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
-                            'bg-slate-100 text-slate-500'
-                          }`}>
-                            {team.rank}
-                          </span>
-                        </td>
+                        return (
+                          <tr 
+                            key={idx}
+                            className={`border-b border-slate-100 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors ${
+                              isTop5 ? 'bg-emerald-50/10 font-bold' : ''
+                            }`}
+                          >
+                            {/* Rank */}
+                            <td className="p-3.5 text-center">
+                              <span className={`inline-flex items-center justify-center w-5.5 h-5.5 rounded-full text-xs font-black ${
+                                team.rank === 1 ? 'bg-amber-500 text-white' :
+                                team.rank === 2 ? 'bg-slate-400 text-white' :
+                                team.rank === 3 ? 'bg-amber-700 text-white' :
+                                isTop5 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                                'bg-slate-100 text-slate-500'
+                              }`}>
+                                {team.rank}
+                              </span>
+                            </td>
 
-                        {/* Team Name Badge */}
-                        <td className="p-3.5">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-5 h-5 rounded-full text-white font-black text-[10px] flex items-center justify-center shrink-0 ${getTeamColor(code)}`}>
-                              {CONFIG.TEAMS[code]?.logoChar || code[0]}
-                            </span>
-                            <span className="text-slate-900 font-extrabold">{team.teamName}</span>
-                          </div>
-                        </td>
+                            {/* Team Name Badge */}
+                            <td className="p-3.5">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-5 h-5 rounded-full text-white font-black text-[10px] flex items-center justify-center shrink-0 ${getTeamColor(code)}`}>
+                                  {CONFIG.TEAMS[code]?.logoChar || code[0]}
+                                </span>
+                                <span className="text-slate-900 font-extrabold">{team.teamName}</span>
+                              </div>
+                            </td>
 
-                        {/* Stats columns */}
-                        <td className="p-3.5 text-center font-bold text-slate-500 font-mono">{team.games}</td>
-                        <td className="p-3.5 text-center font-extrabold text-slate-800 font-mono">{team.wins}</td>
-                        <td className="p-3.5 text-center font-extrabold text-slate-800 font-mono">{team.losses}</td>
-                        <td className="p-3.5 text-center font-bold text-slate-400 font-mono">{team.draws}</td>
-                        
-                        <td className="p-3.5 text-center font-extrabold text-blue-600 font-mono">
-                          {team.winningPct.toFixed(3)}
-                        </td>
+                            {/* Stats columns */}
+                            <td className="p-3.5 text-center font-bold text-slate-500 font-mono">{team.games}</td>
+                            <td className="p-3.5 text-center font-extrabold text-slate-800 font-mono">{team.wins}</td>
+                            <td className="p-3.5 text-center font-extrabold text-slate-800 font-mono">{team.losses}</td>
+                            <td className="p-3.5 text-center font-bold text-slate-400 font-mono">{team.draws}</td>
+                            
+                            <td className="p-3.5 text-center font-extrabold text-blue-600 font-mono">
+                              {team.winningPct.toFixed(3)}
+                            </td>
 
-                        {/* Games behind */}
-                        <td className="p-3.5 text-center font-bold text-slate-500 font-mono">
-                          {team.gamesBehind === 0 ? '-' : team.gamesBehind.toFixed(1)}
-                        </td>
+                            {/* Games behind */}
+                            <td className="p-3.5 text-center font-bold text-slate-500 font-mono">
+                              {team.gamesBehind === 0 ? '-' : team.gamesBehind.toFixed(1)}
+                            </td>
 
-                        {/* Last 10 games */}
-                        <td className="p-3.5 text-center font-mono text-slate-600">{team.last10}</td>
-                        
-                        {/* Streak */}
-                        <td className="p-3.5 text-center">
-                          <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black ${
-                            team.streak.startsWith('승') 
-                              ? 'bg-rose-100 text-rose-800' 
-                              : team.streak.startsWith('패') 
-                                ? 'bg-blue-100 text-blue-800' 
-                                : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {team.streak}
-                          </span>
-                        </td>
+                            {/* Last 10 games */}
+                            <td className="p-3.5 text-center font-mono text-slate-600">{team.last10}</td>
+                            
+                            {/* Streak */}
+                            <td className="p-3.5 text-center">
+                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black ${
+                                team.streak.startsWith('승') 
+                                  ? 'bg-rose-100 text-rose-800' 
+                                  : team.streak.startsWith('패') 
+                                    ? 'bg-blue-100 text-blue-800' 
+                                    : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {team.streak}
+                              </span>
+                            </td>
 
-                        {/* Runs / RunsAllowed */}
-                        <td className="p-3.5 text-center font-mono text-[11px] text-slate-500">
-                          <span className="text-slate-800 font-bold">{team.runs}</span>
-                          <span className="text-slate-300 mx-1">/</span>
-                          <span>{team.runsAllowed}</span>
-                        </td>
+                            {/* Runs / RunsAllowed */}
+                            <td className="p-3.5 text-center font-mono text-[11px] text-slate-500">
+                              <span className="text-slate-800 font-bold">{team.runs}</span>
+                              <span className="text-slate-300 mx-1">/</span>
+                              <span>{team.runsAllowed}</span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={11} className="p-8 text-center text-slate-400">순위표 데이터를 정상 수집하지 못했습니다.</td>
                       </tr>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={11} className="p-8 text-center text-slate-400">순위표 데이터를 정상 수집하지 못했습니다.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
