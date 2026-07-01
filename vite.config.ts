@@ -24,16 +24,8 @@ function apiMiddlewarePlugin() {
             const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
             const pathname = parsedUrl.pathname;
 
-            let apiPath = '';
-            if (pathname === '/api/health') {
-              apiPath = path.resolve(__dirname, 'api/health.ts');
-            } else if (pathname === '/api/kbo/standings') {
-              apiPath = path.resolve(__dirname, 'api/kbo/standings.ts');
-            } else if (pathname === '/api/kbo/schedule') {
-              apiPath = path.resolve(__dirname, 'api/kbo/schedule.ts');
-            } else if (pathname === '/api/simulate') {
-              apiPath = path.resolve(__dirname, 'api/simulate.ts');
-            }
+            const relativePath = pathname.startsWith('/') ? pathname.slice(1) : pathname;
+            const apiPath = path.resolve(__dirname, relativePath + '.ts');
 
             if (apiPath && fs.existsSync(apiPath)) {
               // Dynamically import the typescript handler via Vite's ssrLoadModule

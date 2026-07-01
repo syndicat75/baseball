@@ -1,34 +1,18 @@
 /**
- * @file standings.ts
- * @description KBO 리그 팀 순위표 정보 제공 Vercel Serverless API 엔드포인트입니다.
- * 득점, 실점, 연승/연패, 최근 10경기 및 게임차 등 확장된 세부 통계(TeamStanding[])를 계산하여 캐싱한 뒤 반환합니다.
+ * @file today-games.ts
+ * @description KBO 리그 당일 경기 일정 및 선발 명단 정보를 제공하는 Vercel Serverless API 엔드포인트입니다.
+ * 한국시간 기준 오늘 날짜의 경기 리스트(TodayGame[])를 반환합니다.
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fallbackSource } from '../../src/lib/kbo/sources/fallbackSource';
-import { calculateDetailedStandings } from '../../src/lib/kbo/statsCalculator';
-
-/**
- * @function getKstDateString
- * @description 현재 서버 시간을 바탕으로 한국 표준시(KST) YYYY-MM-DD 날짜 문자열을 반환합니다.
- */
-function getKstDateString(): string {
-  console.log('[api/kbo/standings] [CALL] getKstDateString');
-  const d = new Date();
-  const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
-  const kstOffset = 9 * 60 * 60 * 1000;
-  const kstDate = new Date(utc + kstOffset);
-  const yyyy = kstDate.getFullYear();
-  const mm = String(kstDate.getMonth() + 1).padStart(2, '0');
-  const dd = String(kstDate.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
+import { buildTodayGames, getKstDateString } from '../../src/lib/kbo/buildTodayGames';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { date } = req.query;
-  console.log(`[api/kbo/standings] [CALL] handler - date: "${date}"`);
+  console.log(`[api/kbo/today-games] [CALL] handler - date: "${date}"`);
 
   const todayStr = getKstDateString();
   const targetDate = (date as string) || todayStr;
@@ -54,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ];
       for (const p of candidates) {
         if (fs.existsSync(p)) {
-          console.log(`[api/kbo/standings] Found ${fileName} at: ${p}`);
+          console.log(`[api/kbo/today-games] Found ${fileName} at: ${p}`);
           return p;
         }
       }
@@ -64,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let dataPath = findDataPath(`kbo-${targetDate}.json`);
 
     if (!dataPath) {
-      console.log(`[api/kbo/standings] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
+      console.log(`[api/kbo/today-games] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
       dataPath = findDataPath('kbo-latest.json');
     }
 
@@ -74,7 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const rawData = fs.readFileSync(dataPath, 'utf-8');
       kboData = JSON.parse(rawData);
     } else {
-      console.warn('[api/kbo/standings] JSON 파일 누락. 로컬 예비 데이터 생성.');
+      console.warn('[api/kbo/today-games] JSON 파일 누락. 로컬 예비 데이터 생성.');
       const fallbackStandings = await fallbackSource.getStandings();
       const fallbackSchedule = await fallbackSource.getSchedule();
       kboData = {
@@ -87,29 +71,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
     }
 
-    // 득점, 실점, 최근 10경기, 연승/연패 등이 포함된 정밀한 TeamStanding 리스트 계산
-    const rawStandings = kboData.standings || [];
-    const completedGames = kboData.completedGames || [];
-    const fetchedAt = kboData.fetchedAt || new Date().toISOString();
+    const todayGames = buildTodayGames(kboData, targetDate);
 
-    const detailedStandings = calculateDetailedStandings(rawStandings, completedGames, fetchedAt);
-
-    // Vercel Serverless 캐시 설정 (s-maxage: 1800초 = 30분 캐싱)
-    res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=600');
+    // s-maxage=600 (10분 캐시)
+    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=300');
 
     const response = {
       source: kboData.primarySource || 'static-json',
       sourceLabel: kboData.sourceLabel || '예약 수집 JSON 데이터',
       asOfDate: kboData.asOfDate || todayStr,
-      fetchedAt,
-      standings: detailedStandings,
+      targetDate,
+      fetchedAt: kboData.fetchedAt || new Date().toISOString(),
+      games: todayGames,
     };
 
     return res.status(200).json(response);
   } catch (err: any) {
-    console.error('[api/kbo/standings] 순위표 데이터 구축 실패:', err);
+    console.error('[api/kbo/today-games] 당일 경기 목록 구축 실패:', err);
     return res.status(500).json({
-      error: 'Standings calculation failure',
+      error: 'Today games load failure',
       details: err.message,
     });
   }

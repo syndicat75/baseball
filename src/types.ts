@@ -124,3 +124,92 @@ export interface KBOStandingsResult {
   errorType?: 'API route 없음' | 'KBO fetch 실패' | 'HTML parser 실패' | '일정 데이터 없음' | '캐시 데이터 사용' | '샘플 데이터 사용';
   errorMessage?: string;
 }
+
+/**
+ * @interface TeamStanding
+ * @description KBO 리그 팀 순위표 표시를 위한 상세 구단 데이터 구조입니다.
+ */
+export interface TeamStanding {
+  rank: number;
+  teamName: string;
+  games: number;
+  wins: number;
+  losses: number;
+  draws: number;
+  winningPct: number;
+  gamesBehind: number;
+  streak: string;
+  last10: string;
+  battingAvg: number;
+  era: number;
+  runs: number;
+  runsAllowed: number;
+  updatedAt: string;
+}
+
+/**
+ * @interface PitcherStats
+ * @description 투수의 시즌 및 최근 성적 정보를 담는 데이터 구조입니다.
+ */
+export interface PitcherStats {
+  name: string;
+  team: string;
+  wins: number;
+  losses: number;
+  winningPct: number;
+  era: number;
+  innings: number;
+  whip: number;
+  strikeouts: number;
+  recentEra: number;
+  recentGames: number;
+}
+
+/**
+ * @interface BatterLineup
+ * @description 타순 및 타자 성적 정보를 담는 데이터 구조입니다.
+ */
+export interface BatterLineup {
+  battingOrder: number;
+  position: string;
+  name: string;
+  battingAvg: number;
+  obp: number;
+  slg: number;
+  ops: number;
+  isConfirmed: boolean;
+}
+
+/**
+ * @interface GamePrediction
+ * @description 경기별 양 팀 예측 승률 및 세부 분석 근거를 담는 데이터 구조입니다.
+ */
+export interface GamePrediction {
+  awayWinProbability: number;
+  homeWinProbability: number;
+  confidence: '낮음' | '보통' | '높음';
+  summary: string;
+  factors: string[];
+  missingData: string[];
+}
+
+/**
+ * @interface TodayGame
+ * @description 당일 경기 일정 및 해당 경기의 승률 예측 정보를 통합하는 데이터 구조입니다.
+ */
+export interface TodayGame {
+  gameId: string;
+  date: string;
+  time: string;
+  stadium: string;
+  awayTeam: string;
+  homeTeam: string;
+  status: '예정' | '진행중' | '종료' | '우천취소' | '취소' | '지연';
+  awayStarter: PitcherStats | null;
+  homeStarter: PitcherStats | null;
+  awayLineup: BatterLineup[];
+  homeLineup: BatterLineup[];
+  prediction: GamePrediction | null;
+  updatedAt: string;
+}
+

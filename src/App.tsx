@@ -19,6 +19,7 @@ import { simulateFromStaticData } from './lib/simulation/simulateFromStaticData'
 import { runAllSimulationTests, TestResultItem } from './lib/simulation/runSimulationTests';
 
 // New features components
+import { KboTodayGamesAndStandings } from './components/KboTodayGamesAndStandings';
 import { DataReliabilityCard } from './components/DataReliabilityCard';
 import { calculateDataReliability } from './lib/quality/calculateDataReliability';
 import { FifthPlaceCutoffCard } from './components/FifthPlaceCutoffCard';
@@ -556,6 +557,9 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Real-time Standings and Today's Games Predictions Widget */}
+        <KboTodayGamesAndStandings />
         
         {/* Row 1: Configuration & Controls */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
