@@ -97,4 +97,61 @@ The UI is built with desktop-first precision using **React 19**, styled with cus
 
 *   **Type Safety**: Every shared interface, enum, and class payload is defined in `/src/types.ts` to ensure strict contract mapping.
 *   **Lazy Initialization & Fault-Tolerance**: All web scraper selectors are wrapped in try-catch structures, and division operations are guarded against division-by-zero errors.
-*   **Exhaustive Telemetry Logs**: Function executions, database state modifications, and user interactive actions are comprehensively logged to the console to enable easy debugging.enable easy debugging.
+*   **Exhaustive Telemetry Logs**: Function executions, database state modifications, and user interactive actions are comprehensively logged to the console to enable easy debugging.
+
+---
+
+## 5. Advanced Rule-Based Prediction Engine (`/src/lib/kbo/predictionEngine.ts`)
+
+To ensure robust and highly analytical game outcomes without relying on unstable offline ML networks or paid APIs, we implement a **Multi-Factor Rule-Based Deterministic Scoring Model** combining 5 key dimension metrics:
+
+### A. Team Base Strength (25% Weight)
+*   **Formula**:
+    $$\text{teamBaseScore} = \text{seasonWinPct} \times 0.55 + \text{pythagoreanWinPct} \times 0.35 + \text{normalizedRunDiff} \times 0.10$$
+*   **Pythagorean Win Rate**:
+    $$\text{pythagoreanWinPct} = \frac{\text{runs}^{1.83}}{\text{runs}^{1.83} + \text{runsAllowed}^{1.83}}$$
+*   **Run Differential Normalization**: Normalizes season runs differential ($\text{runs} - \text{runsAllowed}$) within a KBO-realistic window of $[-150, 150]$ to a standard $[0, 1]$ scale.
+
+### B. Recent 10-Game Trend (15% Weight)
+*   Extracts the team's true recent form based on actual completed match histories ($P(\text{Win}) = \frac{\text{last10Wins}}{10}$).
+*   Fallback: If 10-game history is missing, defaults gracefully to the season win rate with a telemetry alert and down-grades prediction confidence.
+
+### C. Starting Pitcher Matchup (30% Weight)
+*   **Formula**:
+    $$\text{pitcherScore} = \text{normEra} \times 0.40 + \text{normWhip} \times 0.25 + \text{pitcherWinPct} \times 0.20 + \text{normInnings} \times 0.15$$
+*   **Era Normalization (Lower is Better)**: Standardized between $2.00$ (best) and $7.00$ (worst).
+*   **Whip Normalization (Lower is Better)**: Standardized between $1.00$ and $1.80$.
+*   **Innings Normalization (Higher is Better)**: Standardized between $40$ and $180$.
+*   **Recent Form**: If `recentEra` (last 3 matches) is available, it overrides the career season average to represent live momentum.
+
+### D. Lineup 화력 (15% Weight)
+*   Evaluated via a 4-tier fallback model:
+    1.  **Tier 1**: Cumulative average OPS of the 9-man confirmed/expected active batting lineup.
+    2.  **Tier 2**: Cumulative Season Team OPS.
+    3.  **Tier 3**: Cumulative Season Team Batting Average.
+    4.  **Tier 4**: Neutral KBO standard average ($0.500$).
+
+### E. Bullpen Stability (5% Weight)
+*   Calculated based on the bullpen-specific ERA normalized against the league standard $[2.50, 6.50]$.
+*   *Note: Includes a TODO anchor for a dynamic pitch-count fatigue load index in subsequent minor releases.*
+
+### F. Elo Rating & Home Advantage (10% Weight)
+*   **Elo Formula**:
+    $$\text{teamElo} = 1500 + (\text{seasonWinPct} - 0.5) \times 400$$
+    *   *Home team receives a standard $+25$ point advantage booster to their Elo rating prior to match simulation.*
+*   **Elo Winning Expectation**:
+    $$P_{\text{Elo}} = \frac{1}{1 + 10^{\frac{\text{opponentElo} - \text{teamElo}}{400}}}$$
+*   **Final Home Advantage**: Direct $+0.03$ addition to the home team's overall combined score prior to percentage scaling.
+
+---
+
+## 6. Full-Stack Production Container Router (`/server.ts`)
+
+In contrast to pure static SPAs or standard Vite setups that produce 404s when attempting serverless execution inside a standard Cloud Run container, our workspace leverages an **Express + Vite unified full-stack architecture**:
+
+*   **Integrated API Layer**: Integrates all `/api/kbo/*` serverless files inside Express router endpoints using a custom Vercel adapter middleware (`adaptHandler`).
+*   **Zero-Overhead Bundling**: During the production build pipeline (`npm run build`), the server entry point `/server.ts` is compiled into a single, optimized CJS bundle at `/dist/server.cjs` via `esbuild`.
+*   **Dual Mode Asset Serving**:
+    *   *Development*: Vite middleware processes asset pipeline and fast HMR routing.
+    *   *Production*: Node directly serves optimized assets from `/dist/` and runs SPA fallback routing for any non-API address requests.
+

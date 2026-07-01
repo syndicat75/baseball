@@ -146,7 +146,17 @@ export function buildTodayGames(kboData: any, targetDate?: string): TodayGame[] 
     // 3. 예측 승률 산출
     let prediction: GamePrediction | null = null;
     if (status !== '우천취소' && status !== '취소') {
-      prediction = generatePrediction(away, home, stadium, standings, completed);
+      prediction = generatePrediction(
+        away,
+        home,
+        stadium,
+        standings,
+        completed,
+        awayStarter || undefined,
+        homeStarter || undefined,
+        awayLineup,
+        homeLineup
+      );
     }
 
     return {

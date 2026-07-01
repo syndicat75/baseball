@@ -185,12 +185,17 @@ export interface BatterLineup {
  * @description 경기별 양 팀 예측 승률 및 세부 분석 근거를 담는 데이터 구조입니다.
  */
 export interface GamePrediction {
+  gameId?: string;
+  awayTeam?: string;
+  homeTeam?: string;
   awayWinProbability: number;
   homeWinProbability: number;
-  confidence: '낮음' | '보통' | '높음';
+  confidence: '낮음' | '보통' | '높음' | '예측 보류';
   summary: string;
   factors: string[];
   missingData: string[];
+  modelVersion?: string;
+  calculatedAt?: string;
 }
 
 /**
