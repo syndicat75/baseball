@@ -11,6 +11,7 @@ import { parseMyKboGameDetail, DetailPitcherStats } from './sources/parseMyKboGa
 import { validateStandingsData, detectDataDegradation } from './sources/validateKboData';
 import { getCache, setCache, deleteCache } from './cache';
 import { getKoreaTodayString, toKboDate } from './dateUtils';
+import { fallbackSchedule2026 } from '../../data/fallbackSchedule2026';
 
 export interface StandingsResult {
   success: boolean;
@@ -221,19 +222,42 @@ export async function getTodayGamesData(dateStr: string, forceRefresh = false): 
     } catch (fallbackError: any) {
       console.error('[kboDataService] [FATAL] Both official scoreboard and MyKBOStats fallback failed!', fallbackError);
       
-      const failResponse: TodayGamesResult = {
-        success: false,
-        date: dateStr,
-        kboDate: kboDateStr,
-        source: 'NONE',
-        sourceLabel: '수집 실패',
-        fallbackUsed: true,
-        updatedAt: nowStr,
-        games: [],
-        emptyReason: 'FETCH_OR_PARSE_FAILED',
-        error: `경기 일정을 불러오는 데 전면 실패했습니다. (공식에러: ${error.message || error}, 보조에러: ${fallbackError.message || fallbackError})`
-      };
-      return failResponse;
+      console.log(`[kboDataService] Attempting local schedule recovery for date: "${dateStr}" from fallbackSchedule2026`);
+      const localFallbackGames = fallbackSchedule2026.filter(g => g.date === dateStr);
+      
+      if (localFallbackGames && localFallbackGames.length > 0) {
+        parsedGames = localFallbackGames.map(g => ({
+          gameId: `${kboDateStr}_${g.away}_${g.home}`,
+          date: g.date,
+          time: g.time || '18:30',
+          awayTeam: g.away,
+          homeTeam: g.home,
+          awayScore: g.awayScore,
+          homeScore: g.homeScore,
+          status: g.status === 'completed' ? '종료' : '예정',
+          stadium: g.stadium || '구장',
+          detailUrl: null,
+          source: 'bundled-fallback'
+        }));
+        selectedSource = 'BUNDLED_FALLBACK';
+        sourceLabel = '내장 백업 일정 데이터';
+        fallbackUsed = true;
+        console.log(`[kboDataService] [SUCCESS] Recovered ${parsedGames.length} games from local fallback schedule for date: "${dateStr}"`);
+      } else {
+        const failResponse: TodayGamesResult = {
+          success: false,
+          date: dateStr,
+          kboDate: kboDateStr,
+          source: 'NONE',
+          sourceLabel: '수집 실패',
+          fallbackUsed: true,
+          updatedAt: nowStr,
+          games: [],
+          emptyReason: 'FETCH_OR_PARSE_FAILED',
+          error: `경기 일정을 불러오는 데 전면 실패했습니다. (공식에러: ${error.message || error}, 보조에러: ${fallbackError.message || fallbackError})`
+        };
+        return failResponse;
+      }
     }
   }
 
