@@ -99,6 +99,11 @@ export const officialKboKoreanSource: KboDataSource = {
         const nameText = $(tds[1]).text().trim();
         const teamCode = normaliseKoreanTeamCode(nameText);
 
+        if (!teamCode) {
+          console.log(`[officialKboKoreanSource] Skipping non-team table row: "${nameText}"`);
+          return;
+        }
+
         const games = parseInt($(tds[2]).text().trim()) || 0;
         const wins = parseInt($(tds[3]).text().trim()) || 0;
         const losses = parseInt($(tds[4]).text().trim()) || 0;
@@ -112,7 +117,7 @@ export const officialKboKoreanSource: KboDataSource = {
           throw new Error(`데이터 정합성 오류: ${nameText} 구단의 경기수(${games})와 승패무 합계(${expectedGames})가 일치하지 않습니다.`);
         }
 
-        if (teamCode && teams.length < 10 && !teams.some(t => t.team === teamCode)) {
+        if (teams.length < 10 && !teams.some(t => t.team === teamCode)) {
           teams.push({
             team: teamCode,
             displayName: CONFIG.TEAMS[teamCode]?.nameKo || teamCode,
