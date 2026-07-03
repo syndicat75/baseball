@@ -6,6 +6,8 @@
 
 import { parseOfficialStandings, OfficialTeamStanding } from './sources/parseOfficialStandings';
 import { parseOfficialScoreboard, ScoreboardGame } from './sources/parseOfficialScoreboard';
+import { parseOfficialDailySchedule } from './sources/parseOfficialDailySchedule';
+import { parseNaverSchedule } from './sources/parseNaverSchedule';
 import { parseMyKboSchedule, MyKboGame } from './sources/parseMyKboSchedule';
 import { parseMyKboGameDetail, DetailPitcherStats } from './sources/parseMyKboGameDetail';
 import { validateStandingsData, detectDataDegradation } from './sources/validateKboData';
@@ -40,6 +42,7 @@ export interface TodayGamesResult {
   error?: string;
   warnings?: string[];
   message?: string;
+  triedSources?: string[];
 }
 
 /**
@@ -192,108 +195,124 @@ export async function getTodayGamesData(dateStr: string, forceRefresh = false, i
   const nowStr = new Date().toISOString();
 
   let parsedGames: any[] = [];
-  let selectedSource = 'KBO_OFFICIAL_KO';
-  let sourceLabel = 'KBO 공식 스코어보드';
+  let selectedSource = 'NONE';
+  let sourceLabel = '없음';
   let fallbackUsed = false;
+  let successfulFetch = false;
+  const triedSources: string[] = [];
 
-  // 1. KBO 공식 한국어 스코어보드 수집 최우선 시도
+  // 1순위: KBO 공식 영문 Daily Schedule
+  triedSources.push('KBO_OFFICIAL_DAILY_SCHEDULE');
   try {
-    console.log(`[kboDataService] Attempting KBO official scoreboard parse for date: "${dateStr}"`);
-    const scoreboardGames = await parseOfficialScoreboard(dateStr);
-    
-    if (scoreboardGames) {
-      if (scoreboardGames.length > 0) {
-        parsedGames = scoreboardGames;
-        console.log(`[kboDataService] Successfully parsed ${parsedGames.length} games from official KBO scoreboard.`);
-      } else {
-        // 공식 스코어보드 페이지는 성공적으로 로딩되었으나 경기가 0건인 경우 -> 진짜 경기 없는 날 (예: 월요일)
-        console.log(`[kboDataService] Official KBO scoreboard successfully returned 0 games for date: "${dateStr}". Confirmed genuine off-day.`);
-        const emptyResponse: TodayGamesResult = {
-          success: true,
-          date: dateStr,
-          kboDate: kboDateStr,
-          source: 'KBO_OFFICIAL_KO',
-          sourceLabel: 'KBO 공식 스코어보드',
-          fallbackUsed: false,
-          updatedAt: nowStr,
-          games: [],
-          emptyReason: 'NO_SCHEDULED_GAMES'
-        };
-        await setCache(cacheKey, emptyResponse);
-        return emptyResponse;
-      }
+    console.log(`[kboDataService] Crawling 1st source: KBO Official Daily Schedule for date: "${dateStr}"`);
+    const dailyRes = await parseOfficialDailySchedule(dateStr);
+    successfulFetch = true;
+    if (dailyRes.games && dailyRes.games.length > 0) {
+      parsedGames = dailyRes.games;
+      selectedSource = 'KBO_OFFICIAL_DAILY_SCHEDULE';
+      sourceLabel = 'KBO 공식 영문 일정';
+      fallbackUsed = false;
+    } else if (dailyRes.sectionFound) {
+      console.log(`[kboDataService] Daily Schedule section found for "${dateStr}" but returned 0 games. Proceeding to Scoreboard...`);
     }
-  } catch (error: any) {
-    // 2. KBO 공식 실패 시, MyKBOStats 주간 일정 fallback 기동
-    console.log(`[kboDataService] Official scoreboard failed: ${error.message || error}. Running MyKBOStats week schedule parser.`);
-    selectedSource = 'MYKBO_UNOFFICIAL';
-    sourceLabel = 'MyKBOStats 보조 데이터';
-    fallbackUsed = true;
+  } catch (err: any) {
+    console.warn(`[kboDataService] Daily Schedule parser failed:`, err.message || err);
+  }
 
+  // 2순위: KBO 공식 영문 Scoreboard (1순위 실패 시)
+  if (parsedGames.length === 0) {
+    triedSources.push('KBO_OFFICIAL_SCOREBOARD');
     try {
-      const myKboGames = await parseMyKboSchedule(dateStr);
-      if (myKboGames) {
-        if (myKboGames.length > 0) {
-          parsedGames = myKboGames;
-          console.log(`[kboDataService] Successfully fallback parsed ${parsedGames.length} games from MyKBOStats week schedule.`);
-        } else {
-          // MyKBOStats도 에러 없이 성공적으로 돌았으나 0건인 경우 역시 진짜 경기 없는 날
-          console.log(`[kboDataService] MyKBOStats successfully confirmed 0 scheduled games for date: "${dateStr}".`);
-          const emptyResponse: TodayGamesResult = {
-            success: true,
-            date: dateStr,
-            kboDate: kboDateStr,
-            source: 'MYKBO_UNOFFICIAL',
-            sourceLabel: 'MyKBOStats 보조 데이터',
-            fallbackUsed: true,
-            updatedAt: nowStr,
-            games: [],
-            emptyReason: 'NO_SCHEDULED_GAMES'
-          };
-          await setCache(cacheKey, emptyResponse);
-          return emptyResponse;
-        }
+      console.log(`[kboDataService] Crawling 2nd source: KBO Official Scoreboard for date: "${dateStr}"`);
+      const scoreboardGames = await parseOfficialScoreboard(dateStr);
+      successfulFetch = true;
+      if (scoreboardGames && scoreboardGames.length > 0) {
+        parsedGames = scoreboardGames;
+        selectedSource = 'KBO_OFFICIAL_SCOREBOARD';
+        sourceLabel = 'KBO 공식 스코어보드';
+        fallbackUsed = true;
       }
-    } catch (fallbackError: any) {
-      console.error('[kboDataService] [FATAL] Both official scoreboard and MyKBOStats fallback failed!', fallbackError);
-      
-      // 실시간 수집 에러 발생 시 fallbackSchedule2026을 사용해 실시간 일정을 채우지 않고 에러 반환 (경기 없음 오기입 차단)
-      const failResponse: TodayGamesResult = {
-        success: false,
-        date: dateStr,
-        kboDate: kboDateStr,
-        source: 'NONE',
-        sourceLabel: '수집 실패',
-        fallbackUsed: false,
-        updatedAt: nowStr,
-        games: [],
-        emptyReason: 'FETCH_OR_PARSE_FAILED',
-        error: 'SCHEDULE_FETCH_FAILED',
-        message: `KBO 공식 및 보조 일정 데이터 수집에 전면 실패했습니다. (공식에러: ${error.message || error}, 보조에러: ${fallbackError.message || fallbackError})`
-      };
-      return failResponse;
+    } catch (err: any) {
+      console.warn(`[kboDataService] Scoreboard parser failed:`, err.message || err);
     }
   }
 
-  // 3. 실제 잡힌 경기가 없는 경우 (예: 월요일 무경기)
+  // 3순위: 네이버 스포츠 일정 페이지 (2순위 실패 시)
   if (parsedGames.length === 0) {
-    console.log(`[kboDataService] No scheduled games found for "${dateStr}". Returning empty schedule response.`);
+    triedSources.push('NAVER_SPORTS_FALLBACK');
+    try {
+      console.log(`[kboDataService] Crawling 3rd source: Naver Sports Schedule for date: "${dateStr}"`);
+      const naverGames = await parseNaverSchedule(dateStr);
+      successfulFetch = true;
+      if (naverGames && naverGames.length > 0) {
+        parsedGames = naverGames;
+        selectedSource = 'NAVER_SPORTS_FALLBACK';
+        sourceLabel = '네이버 스포츠 백업';
+        fallbackUsed = true;
+      }
+    } catch (err: any) {
+      console.warn(`[kboDataService] Naver Sports parser failed:`, err.message || err);
+    }
+  }
+
+  // 4순위: MyKBOStats (3순위 실패 시)
+  if (parsedGames.length === 0) {
+    triedSources.push('MYKBO_UNOFFICIAL');
+    try {
+      console.log(`[kboDataService] Crawling 4th source: MyKBOStats for date: "${dateStr}"`);
+      const myKboGames = await parseMyKboSchedule(dateStr);
+      successfulFetch = true;
+      if (myKboGames && myKboGames.length > 0) {
+        parsedGames = myKboGames;
+        selectedSource = 'MYKBO_UNOFFICIAL';
+        sourceLabel = 'MyKBOStats 보조 데이터';
+        fallbackUsed = true;
+      }
+    } catch (err: any) {
+      console.warn(`[kboDataService] MyKBOStats parser failed:`, err.message || err);
+    }
+  }
+
+  // 5. 모든 소스 시도 결과 파싱 데이터가 없고, fetch 조차 성공하지 못한 최악의 상황
+  if (parsedGames.length === 0 && !successfulFetch) {
+    console.error('[kboDataService] [FATAL] All sources failed to fetch scheduled games!');
+    const failResponse: TodayGamesResult = {
+      success: false,
+      date: dateStr,
+      kboDate: kboDateStr,
+      source: 'NONE',
+      sourceLabel: '수집 실패',
+      fallbackUsed: false,
+      updatedAt: nowStr,
+      games: [],
+      emptyReason: 'FETCH_OR_PARSE_FAILED',
+      error: 'SCHEDULE_FETCH_FAILED',
+      message: '공식 및 보조 일정 데이터 수집에 완전히 실패했습니다.',
+      triedSources
+    };
+    return failResponse;
+  }
+
+  // 6. 실제 잡힌 경기가 없는 경우 (예: 월요일 무경기) - fetch는 성공하였으나 경기가 전무할 때
+  if (parsedGames.length === 0) {
+    console.log(`[kboDataService] No scheduled games found for "${dateStr}". Confirmed genuine off-day.`);
     const emptyResponse: TodayGamesResult = {
       success: true,
       date: dateStr,
       kboDate: kboDateStr,
-      source: selectedSource,
-      sourceLabel,
+      source: selectedSource !== 'NONE' ? selectedSource : 'NONE',
+      sourceLabel: selectedSource !== 'NONE' ? sourceLabel : '수집 완료 (일정 없음)',
       fallbackUsed,
       updatedAt: nowStr,
       games: [],
-      emptyReason: 'NO_SCHEDULED_GAMES'
+      emptyReason: 'NO_SCHEDULED_GAMES',
+      triedSources
     };
     await setCache(cacheKey, emptyResponse);
     return emptyResponse;
   }
 
-  // 4. 각 경기 카드별 선발투수 정보 상세 크롤링 병렬 수행 여부 제어
+  // 7. 각 경기 카드별 선발투수 정보 상세 크롤링 병렬 수행 여부 제어
   let detailedGames: any[] = [];
   
   if (includeDetails) {
@@ -360,7 +379,7 @@ export async function getTodayGamesData(dateStr: string, forceRefresh = false, i
     }));
   }
 
-  // 5. 최종 구성 일정 패키지 완성 및 캐시 보관
+  // 8. 최종 구성 일정 패키지 완성 및 캐시 보관
   const finalResponse: TodayGamesResult = {
     success: true,
     date: dateStr,
@@ -370,7 +389,8 @@ export async function getTodayGamesData(dateStr: string, forceRefresh = false, i
     fallbackUsed,
     updatedAt: nowStr,
     games: detailedGames,
-    emptyReason: null
+    emptyReason: null,
+    triedSources
   };
 
   // 종료된 경기가 있으면 캐시를 길게(30분), 모두 예정인 경우 5분 TTL 세팅
