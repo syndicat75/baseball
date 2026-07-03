@@ -114,7 +114,8 @@ export function KboTodayGamesAndStandings() {
 
   /**
    * @function fetchTodayGamesData
-   * @description 백엔드 API인 /api/kbo/today-games?date=... 로부터 경기 일정 및 승률 예측 데이터를 가져옵니다.
+   * @description 백엔드 API인 /api/kbo/today-games?date=... 로부터 경기 일정 데이터를 가져오고,
+   * 세부 승률 예측 및 선발투수 정보는 /api/kbo/predictions?date=... 로 백그라운드 지연 로딩합니다.
    */
   const fetchTodayGamesData = async (dateStr: string) => {
     console.log(`[KboTodayGamesAndStandings] [CALL] fetchTodayGamesData - date: "${dateStr}"`);
@@ -123,10 +124,14 @@ export function KboTodayGamesAndStandings() {
     try {
       const result = await safeFetchJson<any>(`/api/kbo/today-games?date=${dateStr}`);
       if (!result.ok || !result.data) {
-        throw new Error(result.message || '수집 실패');
+        throw new Error(result.message || '일정 서버 응답 오류');
       }
       
       const data = result.data;
+      if (data.success === false) {
+        throw new Error(data.message || data.error || '공식 KBO 스코어보드 수집 또는 파싱에 실패했습니다.');
+      }
+
       if (data && data.games) {
         // 클라이언트 사이드 중복 방지 및 자가 매치업 방지 디펜시브 코드 적용
         const seenGameIds = new Set<string>();
@@ -152,7 +157,7 @@ export function KboTodayGamesAndStandings() {
           fallbackUsed: !!data.fallbackUsed,
           updatedAt: data.updatedAt || new Date().toISOString(),
         });
-        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${uniqueGames.length} unique games.`);
+        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${uniqueGames.length} unique scheduled games.`);
         
         // 새로 불러왔을 때 모든 경기는 기본적으로 닫아두되 첫 경기만 열어둠
         const initialExpanded: Record<string, boolean> = {};
@@ -160,10 +165,39 @@ export function KboTodayGamesAndStandings() {
           initialExpanded[g.gameId] = index === 0;
         });
         setExpandedGames(initialExpanded);
+
+        // 일정이 1경기 이상 있을 때만 백그라운드 예측 및 선발 분석 로딩 개시
+        if (uniqueGames.length > 0) {
+          console.log(`[KboTodayGamesAndStandings] Triggering background lazy-load for predictions on date: "${dateStr}"`);
+          safeFetchJson<any>(`/api/kbo/predictions?date=${dateStr}`)
+            .then((predResult) => {
+              if (predResult.ok && predResult.data && predResult.data.success && predResult.data.predictions) {
+                const preds = predResult.data.predictions;
+                setGames((currentGames) =>
+                  currentGames.map((g) => {
+                    const foundPred = preds.find((p: any) => p.gameId === g.gameId);
+                    if (foundPred) {
+                      return {
+                        ...g,
+                        awayStarter: foundPred.awayStarter || g.awayStarter,
+                        homeStarter: foundPred.homeStarter || g.homeStarter,
+                        prediction: foundPred.prediction
+                      };
+                    }
+                    return g;
+                  })
+                );
+                console.log(`[KboTodayGamesAndStandings] [SUCCESS] Lazy-loaded and merged ${preds.length} predictions and starter pitchers.`);
+              }
+            })
+            .catch((predErr) => {
+              console.warn(`[KboTodayGamesAndStandings] Non-blocking lazy-load prediction failed:`, predErr);
+            });
+        }
       }
     } catch (err: any) {
       console.error('[KboTodayGamesAndStandings] fetchTodayGamesData 실패:', err);
-      setGamesError(`경기 일정 데이터를 수집하지 못했습니다: ${err.message}`);
+      setGamesError(err.message || '공식 KBO 스코어보드 수집 또는 파싱에 실패했습니다.');
     } finally {
       setIsGamesLoading(false);
     }

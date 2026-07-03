@@ -134,81 +134,143 @@ export async function parseOfficialScoreboard(dateStr: string): Promise<Scoreboa
     }
   });
 
-  // 2. 텍스트 블록 기반 Fallback 파서 작동 (수집 수가 5개 미만일 때 작동하여 복원 보강)
-  if (games.length < 5) {
-    console.log(`[parseOfficialScoreboard] Standard parser found ${games.length} games. Running text-based fallback parser.`);
-    
-    // body 내의 순수 텍스트 추출 및 불필요 공백 정규화
-    const bodyText = $('body').text();
-    const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean);
+  // 2. 텍스트 블록 및 정규식 기반 파서 작동 (표준 선택자가 실패했거나 미래 예정 경기를 완벽히 보완)
+  console.log(`[parseOfficialScoreboard] Running text-based regex parser to supplement games.`);
+  
+  const bodyText = $('body').text();
+  const compact = bodyText.replace(/\s+/g, ' ').trim();
 
+  const TEAM_CODES = [
+    'LG', 'DOOSAN', 'KIA', 'SAMSUNG', 'SSG', 'KT', 'LOTTE', 'HANWHA', 'NC', 'KIWOOM',
+    'TWINS', 'BEARS', 'TIGERS', 'LIONS', 'LANDERS', 'WIZ', 'GIANTS', 'EAGLES', 'DINOS', 'HEROES'
+  ];
+
+  const STADIUMS = [
+    'JAMSIL', 'MUNHAK', 'GWANGJU', 'SUWON', 'GOCHEOKSKY', 'GOCHEOK',
+    'DAEGU', 'SAJIK', 'DAEJEON', 'CHANGWON', 'POHANG', 'ULSAN', 'CHEONGJU'
+  ];
+
+  const teamPattern = TEAM_CODES.join('|');
+  const stadiumPattern = STADIUMS.join('|');
+
+  // A. 정밀 일치 패턴: Team Time Team Stadium Time (예: HANWHA 18:30 LG JAMSIL 18:30)
+  const regexExact = new RegExp(
+    `\\b(${teamPattern})\\s+(\\d{1,2}:\\d{2})\\s+(${teamPattern})\\s+(${stadiumPattern})\\s+\\d{1,2}:\\d{2}`,
+    'gi'
+  );
+
+  let match;
+  while ((match = regexExact.exec(compact)) !== null) {
+    const awayTeam = normaliseTeamName(match[1]);
+    const time = match[2];
+    const homeTeam = normaliseTeamName(match[3]);
+    const stadium = match[4].toUpperCase();
+
+    if (!awayTeam || !homeTeam || awayTeam === homeTeam) continue;
+
+    const gameId = `${kboDateParam}_${awayTeam}_${homeTeam}`;
+    if (!games.some(g => g.gameId === gameId)) {
+      console.log(`[parseOfficialScoreboard] Exact text match found: ${awayTeam} vs ${homeTeam} at ${stadium} (${time})`);
+      games.push({
+        gameId,
+        date: dateStr,
+        time,
+        awayTeam,
+        homeTeam,
+        awayScore: null,
+        homeScore: null,
+        status: '예정',
+        stadium,
+        source: 'KBO_OFFICIAL_EN_TEXT',
+        sourceUrl: url,
+      });
+    }
+  }
+
+  // B. 광역 일치 패턴: Team Time Team (stadium은 인근 80글자 안에서 검색)
+  const regexBroad = new RegExp(
+    `\\b(${teamPattern})\\s+(\\d{1,2}:\\d{2})\\s+(${teamPattern})`,
+    'gi'
+  );
+  
+  let matchBroad;
+  while ((matchBroad = regexBroad.exec(compact)) !== null) {
+    const awayTeam = normaliseTeamName(matchBroad[1]);
+    const time = matchBroad[2];
+    const homeTeam = normaliseTeamName(matchBroad[3]);
+
+    if (!awayTeam || !homeTeam || awayTeam === homeTeam) continue;
+
+    const gameId = `${kboDateParam}_${awayTeam}_${homeTeam}`;
+    if (!games.some(g => g.gameId === gameId)) {
+      const lookAheadIndex = regexBroad.lastIndex;
+      const lookAheadText = compact.substring(lookAheadIndex, lookAheadIndex + 80).toUpperCase();
+      let stadium = '구장';
+      for (const s of STADIUMS) {
+        if (lookAheadText.includes(s)) {
+          stadium = s;
+          break;
+        }
+      }
+
+      console.log(`[parseOfficialScoreboard] Broad text match found: ${awayTeam} vs ${homeTeam} at ${stadium} (${time})`);
+      games.push({
+        gameId,
+        date: dateStr,
+        time,
+        awayTeam,
+        homeTeam,
+        awayScore: null,
+        homeScore: null,
+        status: '예정',
+        stadium,
+        source: 'KBO_OFFICIAL_EN_TEXT_BROAD',
+        sourceUrl: url,
+      });
+    }
+  }
+
+  // C. 기존 줄 단위 순차 탐색 파서 백업 구동 (추가 보험)
+  if (games.length < 5) {
+    const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      // "HANWHA 18:30 LG" 혹은 "KT Wiz 18:30 SSG Landers" 형태 파싱
-      const match = line.match(/([A-Za-z\s]{2,})\s+(\d{1,2}:\d{2})\s+([A-Za-z\s]{2,})/);
-      if (match) {
-        const rawAway = match[1].trim();
-        const time = match[2].trim();
-        const rawHome = match[3].trim();
+      const matchLine = line.match(/([A-Za-z\s]{2,})\s+(\d{1,2}:\d{2})\s+([A-Za-z\s]{2,})/);
+      if (matchLine) {
+        const rawAway = matchLine[1].trim();
+        const time = matchLine[2].trim();
+        const rawHome = matchLine[3].trim();
 
         const awayTeam = normaliseTeamName(rawAway);
         const homeTeam = normaliseTeamName(rawHome);
 
         if (awayTeam && homeTeam && awayTeam !== homeTeam && TEAM_ALIASES[awayTeam] && TEAM_ALIASES[homeTeam]) {
-          console.log(`[parseOfficialScoreboard] Text-based fallback matched line: "${line}" -> "${awayTeam}" vs "${homeTeam}"`);
-          
-          let stadium: string | null = null;
-          let awayScore: number | null = null;
-          let homeScore: number | null = null;
-          let status: '예정' | '진행중' | '종료' | '우천취소' | '취소' | '지연' = '예정';
-
-          // 뒤이어 나오는 15줄을 통해 세부 경기 지표 수집
-          const subLines = lines.slice(i, i + 15);
-          const subText = subLines.join('\n');
-
-          // 구장 파악
-          const stadiums = ['JAMSIL', '잠실', 'GOCHEOK', '고척', 'MUNHAK', '문학', 'SUWON', '수원', 'DAEGU', '대구', 'GWANGJU', '광주', 'SAJIK', '사직', 'DAEJEON', '대전', 'CHANGWON', '창원', 'ULSAN', '울산', 'POHANG', '포항', 'CHEONGJU', '청주'];
-          for (const s of stadiums) {
-            if (subText.toUpperCase().includes(s.toUpperCase())) {
-              stadium = s.toUpperCase();
-              break;
-            }
-          }
-
-          // 상태 파악
-          if (subText.toLowerCase().includes('final') || subText.toLowerCase().includes('종료')) {
-            status = '종료';
-          } else if (subText.toLowerCase().includes('postponed') || subText.toLowerCase().includes('cancel') || subText.toLowerCase().includes('취소') || subText.toLowerCase().includes('rain')) {
-            status = '우천취소';
-          } else if (subText.toLowerCase().includes('live') || subText.toLowerCase().includes('진행')) {
-            status = '진행중';
-          }
-
-          // 점수 추출 (원정/홈 팀별 득점 R 분석)
-          subLines.forEach(sl => {
-            const slUpper = sl.toUpperCase();
-            const awayAliases = TEAM_ALIASES[awayTeam] || [];
-            const homeAliases = TEAM_ALIASES[homeTeam] || [];
-
-            const isAwayLine = awayAliases.some(alias => slUpper.includes(alias.toUpperCase()));
-            const isHomeLine = homeAliases.some(alias => slUpper.includes(alias.toUpperCase()));
-
-            if ((isAwayLine || isHomeLine) && !slUpper.includes('TEAM') && !slUpper.includes('SCORE') && !slUpper.includes(':')) {
-              const numbers = sl.match(/\b\d+\b/g);
-              if (numbers && numbers.length > 0) {
-                // R H E B 구조에서 총 득점 R은 보통 끝에서 4번째 자리입니다.
-                const scoreVal = numbers.length >= 4 ? parseInt(numbers[numbers.length - 4], 10) : parseInt(numbers[0], 10);
-                if (isAwayLine && !isHomeLine) {
-                  awayScore = scoreVal;
-                } else if (isHomeLine && !isAwayLine) {
-                  homeScore = scoreVal;
-                }
-              }
-            }
-          });
-
           const gameId = `${kboDateParam}_${awayTeam}_${homeTeam}`;
           if (!games.some(g => g.gameId === gameId)) {
+            let stadium = '구장';
+            let awayScore: number | null = null;
+            let homeScore: number | null = null;
+            let status: '예정' | '진행중' | '종료' | '우천취소' | '취소' | '지연' = '예정';
+
+            const subLines = lines.slice(i, i + 15);
+            const subText = subLines.join('\n');
+
+            for (const s of STADIUMS) {
+              if (subText.toUpperCase().includes(s)) {
+                stadium = s;
+                break;
+              }
+            }
+
+            if (subText.toLowerCase().includes('final') || subText.toLowerCase().includes('종료')) {
+              status = '종료';
+            } else if (subText.toLowerCase().includes('postponed') || subText.toLowerCase().includes('cancel') || subText.toLowerCase().includes('취소')) {
+              status = '우천취소';
+            } else if (subText.toLowerCase().includes('live') || subText.toLowerCase().includes('진행')) {
+              status = '진행중';
+            }
+
+            console.log(`[parseOfficialScoreboard] Line fallback match: ${awayTeam} vs ${homeTeam} at ${stadium} (${time})`);
             games.push({
               gameId,
               date: dateStr,
@@ -218,8 +280,8 @@ export async function parseOfficialScoreboard(dateStr: string): Promise<Scoreboa
               awayScore,
               homeScore,
               status,
-              stadium: stadium || '구장',
-              source: 'KBO_OFFICIAL_EN_TEXT',
+              stadium,
+              source: 'KBO_OFFICIAL_EN_TEXT_LINE',
               sourceUrl: url,
             });
           }

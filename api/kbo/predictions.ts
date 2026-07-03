@@ -39,8 +39,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const standingsRes = await getStandingsData(false);
     const standingsList = standingsRes.success ? standingsRes.standings : [];
 
-    // B. 실시간 당일 일정 및 선발투수 획득
-    const gamesResult = await getTodayGamesData(targetDate, forceRefresh);
+    // B. 실시간 당일 일정 및 선발투수 획득 (예측 분석을 위해 상세 크롤링 활성화: includeDetails = true)
+    const gamesResult = await getTodayGamesData(targetDate, forceRefresh, true);
 
     if (!gamesResult.success) {
       console.warn(`[api/kbo/predictions] Schedule data collection returned success: false. Bypassing 500 error.`);
@@ -105,6 +105,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         awayTeam: g.awayTeam,
         homeTeam: g.homeTeam,
         status: g.status,
+        awayStarter: g.awayStarter,
+        homeStarter: g.homeStarter,
         prediction
       };
     });
