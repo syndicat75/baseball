@@ -1,17 +1,18 @@
 /**
  * @file refresh.ts
  * @description KBO 리그 원격 크롤링 데이터 및 내부 캐시 수동 갱신을 수행하는 Vercel Serverless API 엔드포인트입니다.
- * 너무 잦은 외부 웹사이트 호출을 방지하기 위한 5분 Rate-Limit 보호 기작이 포함되어 있습니다.
+ * 
+ * 주요 특징:
+ * 1. 5분 Rate-Limit 보호 기작 유지
+ * 2. `getUnifiedKboData`에 `forceRefresh = true` 파라미터를 넘겨 캐시 강제 삭제 및 최신 크롤링 수집 기동
+ * 3. 수집 과정에서 검증(games = wins + losses + draws 및 major team 과소 검사)과 동일 시즌 경기수 감소 비허용 규칙을 엄격히 적용
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getBestAvailableStandings, getBestAvailableSchedule } from '../../src/lib/kbo/sources/sourceManager';
-import { clearCache, setCache } from '../../src/lib/kbo/cache';
+import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
 import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
-import * as fs from 'fs';
-import * as path from 'path';
 
-// 메모리 기반의 초간단 전역 Rate-Limit 추적 객체 (컨테이너 라이프사이클 내에서 유지)
+// 메모리 기반 전역 Rate-Limit 추적 객체 (컨테이너 라이프사이클 내에서 유지)
 let lastRefreshTime = 0;
 const REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5분
 
@@ -22,7 +23,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const now = Date.now();
   const timeElapsed = now - lastRefreshTime;
 
-  // 1. Rate-Limit 검증
+  // 1. Rate-Limit 검증 (동일 사용자/봇의 디도스 방어)
   if (timeElapsed < REFRESH_COOLDOWN_MS) {
     const remainingSeconds = Math.ceil((REFRESH_COOLDOWN_MS - timeElapsed) / 1000);
     console.warn(`[api/kbo/refresh] Rate-Limit Blocked. ${remainingSeconds}s remaining.`);
@@ -37,7 +38,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const todayStr = getKoreaTodayString();
   const targetDate = (date as string) || todayStr;
-  const kboDateStr = toKboDate(targetDate);
 
   // 2. 날짜 유효성 검사
   if (!isValidDateString(targetDate)) {
@@ -53,61 +53,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startTime = Date.now();
 
   try {
-    // 3. 캐시 메모리 청소 (전체 캐시를 삭제해 오래된 항목 소거)
-    await clearCache();
-    console.log('[api/kbo/refresh] Purged active cache store.');
-
-    // 4. 다중 데이터 소스 매니저를 통해 최신 순위 및 일정 수집 기동
-    console.log(`[api/kbo/refresh] Re-harvesting data for date: "${targetDate}"`);
-
-    const standingsResult = await getBestAvailableStandings(targetDate);
-    const scheduleResult = await getBestAvailableSchedule(targetDate);
-
-    const mergedData = {
-      asOfDate: targetDate,
-      fetchedAt: new Date().toISOString(),
-      primarySource: standingsResult.source,
-      sourceLabel: standingsResult.sourceLabel,
-      standingsSource: standingsResult.source,
-      standingsSourceLabel: standingsResult.sourceLabel,
-      scheduleSource: scheduleResult.source,
-      scheduleSourceLabel: scheduleResult.sourceLabel,
-      standings: standingsResult.teams,
-      completedGames: scheduleResult.games.filter((g: any) => g.status === 'completed'),
-      remainingGames: scheduleResult.games.filter((g: any) => g.status !== 'completed'),
-      warnings: [...(standingsResult.warnings || []), ...(scheduleResult.warnings || [])],
-    };
-
-    // 5. 로컬 디스크 및 인메모리 캐시 갱신
-    // 특정 날짜 파일(kbo-YYYY-MM-DD.json)과 최신 파일(kbo-latest.json) 모두 저장
-    const filesToSave = [
-      `kbo-${targetDate}.json`,
-      'kbo-latest.json'
-    ];
-
-    try {
-      for (const fileName of filesToSave) {
-        const candidates = [
-          path.join(process.cwd(), 'public', 'data', fileName),
-          path.join(process.cwd(), 'data', fileName),
-          path.join('/tmp', fileName)
-        ];
-        for (const p of candidates) {
-          const dir = path.dirname(p);
-          if (fs.existsSync(dir)) {
-            fs.writeFileSync(p, JSON.stringify(mergedData, null, 2), 'utf-8');
-            console.log(`[api/kbo/refresh] Saved merged raw KBO data to path: ${p}`);
-          }
-        }
-      }
-    } catch (fsErr: any) {
-      console.warn('[api/kbo/refresh] Filesystem write warning:', fsErr.message);
-    }
-
-    // 6. 요구사항 만족: 데이트를 포함한 캐시 키를 활용하여 개별 세트 캐싱 수행
-    await setCache(`kbo:standings:${targetDate}`, mergedData.standings);
-    await setCache(`kbo:schedule:${targetDate}`, scheduleResult.games);
-    await setCache('kbo_latest_data', mergedData);
+    // 3. 통합 데이터 레이어를 forceRefresh = true 로 호출하여 전체 캐시 삭제 및 강제 재크롤링 기동
+    console.log(`[api/kbo/refresh] Invoking forceRefresh for date: "${targetDate}"`);
+    const kboData = await getUnifiedKboData(targetDate, true);
 
     // Rate Limit 시간 업데이트
     lastRefreshTime = Date.now();
@@ -119,10 +67,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       success: true,
       message: `${targetDate} 기준 KBO 리그 데이터가 성공적으로 갱신되었습니다.`,
-      refreshedAt: new Date(lastRefreshTime).toISOString(),
+      refreshedAt: kboData.updatedAt,
       durationMs,
-      source: mergedData.primarySource,
-      sourceLabel: mergedData.sourceLabel,
+      source: kboData.source,
+      sourceLabel: kboData.sourceLabel,
+      stale: kboData.stale,
+      fallbackUsed: kboData.fallbackUsed,
+      warnings: kboData.warnings,
+      lgGames: kboData.lgGames
     });
   } catch (err: any) {
     console.error('[api/kbo/refresh] [ERROR] 수동 갱신 중 예외 발생:', err);
@@ -130,8 +82,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({
       success: false,
       error: 'Refresh process failed',
+      message: '최신 정보를 크롤링하여 수집하는 과정에서 에러가 발생했거나, 새로 수집한 데이터가 stale/invalid 상태여서 안전하게 수동 갱신을 차단했습니다.',
       details: err.message,
     });
   }
 }
-

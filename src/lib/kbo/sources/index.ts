@@ -27,6 +27,7 @@ export interface KboDataSource {
 }
 
 export { fetchWithTimeout } from './fetchWithTimeout';
+export { officialKboKoreanSource } from './officialKboKoreanSource';
 export { myKboStatsSource } from './myKboStatsSource';
 export { officialKboEnglishSource } from './officialKboEnglishSource';
 export { aiScoreSource } from './aiScoreSource';

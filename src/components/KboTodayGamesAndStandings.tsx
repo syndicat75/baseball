@@ -41,6 +41,28 @@ export function KboTodayGamesAndStandings() {
   const [isStandingsLoading, setIsStandingsLoading] = useState<boolean>(false);
   const [isGamesLoading, setIsGamesLoading] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  // KBO 수집 메타데이터 상태 관리
+  const [standingsMeta, setStandingsMeta] = useState<{
+    source: string;
+    sourceLabel: string;
+    asOfDate: string;
+    updatedAt: string;
+    stale: boolean;
+    fallbackUsed: boolean;
+    warnings?: string[];
+  } | null>(null);
+
+  const [gamesMeta, setGamesMeta] = useState<{
+    source: string;
+    sourceLabel: string;
+    stale: boolean;
+    fallbackUsed: boolean;
+    updatedAt: string;
+  } | null>(null);
+
+  // 디버그 패널 가시성 제어 상태
+  const [isDebugExpanded, setIsDebugExpanded] = useState<boolean>(false);
   
   // 격리된 에러 상태 관리 (부분 실패 처리를 위한 장치)
   const [errorMsg, setErrorMsg] = useState<string | null>(null); // 글로벌 에러 (수동 갱신 등)
@@ -71,6 +93,15 @@ export function KboTodayGamesAndStandings() {
       
       if (data && data.standings) {
         setStandings(data.standings);
+        setStandingsMeta({
+          source: data.source || 'Unknown',
+          sourceLabel: data.sourceLabel || '알 수 없는 출처',
+          asOfDate: data.asOfDate || dateStr,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+          stale: !!data.stale,
+          fallbackUsed: !!data.fallbackUsed,
+          warnings: data.warnings,
+        });
         console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchStandingsData - Mapped ${data.standings.length} standings.`);
       }
     } catch (err: any) {
@@ -99,6 +130,13 @@ export function KboTodayGamesAndStandings() {
 
       if (data && data.games) {
         setGames(data.games);
+        setGamesMeta({
+          source: data.source || 'Unknown',
+          sourceLabel: data.sourceLabel || '알 수 없는 출처',
+          stale: !!data.stale,
+          fallbackUsed: !!data.fallbackUsed,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        });
         console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${data.games.length} games.`);
         
         // 새로 불러왔을 때 모든 경기는 기본적으로 닫아두되 첫 경기만 열어둠
@@ -699,8 +737,139 @@ export function KboTodayGamesAndStandings() {
                 </div>
               </div>
             ) : (
-              <div className="overflow-x-auto border border-slate-150 rounded-xl shadow-inner bg-white">
-                <table className="w-full text-left border-collapse">
+              <div className="space-y-4">
+                {/* 1. Stale / Fallback Alerts */}
+                {standingsMeta?.stale && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 font-bold flex items-start gap-2 animate-fade-in shadow-sm">
+                    <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p>⚠️ 현재 표시된 순위표는 최신 공식 데이터가 아니며, 마지막으로 성공했던 캐시 데이터입니다.</p>
+                      {standingsMeta.warnings && standingsMeta.warnings.map((w, idx) => (
+                        <p key={idx} className="mt-1 text-[11px] text-amber-700 font-medium font-normal">• {w}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. Metadata Info Bar */}
+                {standingsMeta && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs font-semibold text-slate-600">
+                    <div className="flex flex-wrap gap-x-5 gap-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-bold">데이터 출처:</span>
+                        <span className="text-blue-600 font-black">{standingsMeta.sourceLabel}</span>
+                        {standingsMeta.fallbackUsed && (
+                          <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-[9px] font-black rounded uppercase">보조</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-bold">기준 일자:</span>
+                        <span className="text-slate-800 font-black font-mono">{standingsMeta.asOfDate}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400 font-bold">마지막 수집 시각:</span>
+                        <span className="text-slate-800 font-bold font-mono">
+                          {new Date(standingsMeta.updatedAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Manual Verification Button */}
+                    <button
+                      onClick={() => setIsDebugExpanded(prev => !prev)}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-black rounded-lg flex items-center gap-1.5 shadow-sm transition-all cursor-pointer border border-slate-700"
+                    >
+                      <Activity className="w-3.5 h-3.5" />
+                      {isDebugExpanded ? '검증 패널 닫기' : '실시간 데이터 검증'}
+                    </button>
+                  </div>
+                )}
+
+                {/* 3. Collapsible Debug / Manual Verification Panel */}
+                {isDebugExpanded && standings.length > 0 && (
+                  <div className="p-5 bg-slate-900 text-slate-100 border border-slate-800 rounded-xl space-y-3.5 animate-fade-in font-sans shadow-lg">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                      <h4 className="font-black text-xs text-white flex items-center gap-2 tracking-wide uppercase">
+                        🔎 실시간 데이터 무결성 검증 리포트 (KBO Integrity Check)
+                      </h4>
+                      <span className="text-[10px] font-mono text-slate-400 font-bold">Status: Online</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs font-medium">
+                      {/* LG Game Count Check */}
+                      <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 space-y-1">
+                        <span className="text-slate-400 font-bold block text-[10px] tracking-wider uppercase">LG 트윈스 소화 경기수</span>
+                        <div className="flex items-baseline gap-1.5">
+                          <strong className="text-lg font-black text-white font-mono">
+                            {standings.find(t => t.teamName === 'LG')?.games || 0}
+                          </strong>
+                          <span className="text-slate-500 font-bold text-[10px] font-sans">경기</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">실시간 KBO 공식 기록실 매핑 수치</p>
+                      </div>
+
+                      {/* Total Leagues Games sum */}
+                      <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 space-y-1">
+                        <span className="text-slate-400 font-bold block text-[10px] tracking-wider uppercase">전체 10개 구단 총 경기수</span>
+                        <div className="flex items-baseline gap-1.5">
+                          <strong className="text-lg font-black text-white font-mono">
+                            {standings.reduce((acc, t) => acc + t.games, 0)}
+                          </strong>
+                          <span className="text-slate-500 font-bold text-[10px] font-sans">경기</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">리그가 정상 활성화 상태인지 확인용</p>
+                      </div>
+
+                      {/* Formula verification: games = wins + losses + draws */}
+                      <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 space-y-1">
+                        <span className="text-slate-400 font-bold block text-[10px] tracking-wider uppercase">정합성 공식 검증</span>
+                        <div>
+                          {(() => {
+                            const mismatch = standings.filter(t => t.games !== (t.wins + t.losses + t.draws));
+                            if (mismatch.length === 0) {
+                              return (
+                                <div className="flex items-center gap-1 text-emerald-400 font-black">
+                                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse mr-1" />
+                                  <span>🟢 검증 합격 (정상)</span>
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div className="flex items-center gap-1 text-rose-400 font-black">
+                                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 mr-1" />
+                                  <span>🔴 검증 불합격 ({mismatch.length}개팀 오류)</span>
+                                </div>
+                              );
+                            }
+                          })()}
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">공식: 경기수 = 승 + 패 + 무 전수 합치</p>
+                      </div>
+                    </div>
+
+                    {/* Detailed Team breakdown */}
+                    <div className="bg-slate-950 rounded-lg p-3 border border-slate-800/80 space-y-2">
+                      <span className="text-slate-400 font-bold block text-[10px] tracking-wider uppercase">구단별 경기수 정합성 상세 분석</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] font-mono">
+                        {standings.map((t, idx) => {
+                          const expectedSum = t.wins + t.losses + t.draws;
+                          const isValid = t.games === expectedSum;
+                          return (
+                            <div key={idx} className="flex items-center justify-between bg-slate-900 px-2.5 py-2 rounded border border-slate-800/50">
+                              <span className="font-extrabold text-slate-300">{t.teamName}</span>
+                              <span className={isValid ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                                {t.games}G ({isValid ? 'OK' : 'ERR'})
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto border border-slate-150 rounded-xl shadow-inner bg-white">
+                  <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-900 text-white font-extrabold text-[11px] uppercase tracking-wider font-sans border-b border-slate-800">
                       <th className="p-3.5 text-center w-12">순위</th>
@@ -799,6 +968,7 @@ export function KboTodayGamesAndStandings() {
                     )}
                   </tbody>
                 </table>
+              </div>
               </div>
             )}
           </div>

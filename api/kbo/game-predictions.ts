@@ -1,13 +1,14 @@
 /**
  * @file game-predictions.ts
  * @description KBO 경기별 승률 예측 상세 데이터를 가공·제공하는 Vercel Serverless API 엔드포인트입니다.
- * GET /api/kbo/game-predictions?date=YYYY-MM-DD
+ * 
+ * 주요 수정 사항:
+ * 1. 로컬 정적 JSON 직접 읽기 대신 `getUnifiedKboData` 공용 서비스 연동 적용
+ * 2. 날짜 포맷 엄격 검증 및 캐싱
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fallbackSource } from '../../src/lib/kbo/sources/fallbackSource';
+import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
 import { buildTodayGames } from '../../src/lib/kbo/buildTodayGames';
 import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
 
@@ -33,60 +34,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    let safeDirname = '';
-    try {
-      safeDirname = __dirname;
-    } catch {
-      safeDirname = process.cwd();
-    }
+    // 통합 데이터 획득
+    const kboData = await getUnifiedKboData(targetDate, false);
 
-    const findDataPath = (fileName: string): string | null => {
-      console.log(`[api/kbo/game-predictions] [CALL] findDataPath for: "${fileName}"`);
-      const candidates = [
-        path.join(process.cwd(), 'public', 'data', fileName),
-        path.join(process.cwd(), 'data', fileName),
-        path.join(safeDirname, '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, 'public', 'data', fileName),
-        path.join(safeDirname, 'data', fileName),
-        path.join('/var/task', 'public', 'data', fileName),
-      ];
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          console.log(`[api/kbo/game-predictions] Found file at: ${p}`);
-          return p;
-        }
-      }
-      return null;
-    };
-
-    let dataPath = findDataPath(`kbo-${targetDate}.json`);
-
-    if (!dataPath) {
-      console.log(`[api/kbo/game-predictions] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
-      dataPath = findDataPath('kbo-latest.json');
-    }
-
-    let kboData: any;
-
-    if (dataPath && fs.existsSync(dataPath)) {
-      const rawData = fs.readFileSync(dataPath, 'utf-8');
-      kboData = JSON.parse(rawData);
-    } else {
-      console.warn('[api/kbo/game-predictions] JSON 파일 누락. 로컬 예비 데이터 생성.');
-      const fallbackStandings = await fallbackSource.getStandings();
-      const fallbackSchedule = await fallbackSource.getSchedule();
-      kboData = {
-        asOfDate: todayStr,
-        primarySource: 'bundled-fallback',
-        sourceLabel: '번들 로컬 예비 데이터',
-        standings: fallbackStandings,
-        completedGames: fallbackSchedule.completedGames || [],
-        remainingGames: fallbackSchedule.remainingGames || [],
-      };
-    }
-
+    // 당일 경기 매칭 및 승률 예측 수치 산출
     const todayGames = buildTodayGames(kboData, targetDate);
 
     // 각 경기의 prediction 정보만 모아서 리스트업
@@ -106,12 +57,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const response = {
       success: true,
-      source: 'prediction-engine',
-      sourceLabel: '경기 승률 분석 예측 모델',
+      source: kboData.source,
+      sourceLabel: kboData.sourceLabel,
+      stale: kboData.stale,
+      fallbackUsed: kboData.fallbackUsed,
       asOfDate: kboData.asOfDate || todayStr,
       targetDate,
       kboDate: kboDateStr,
-      fetchedAt: kboData.fetchedAt || new Date().toISOString(),
+      fetchedAt: kboData.updatedAt || new Date().toISOString(),
       predictions,
     };
 
@@ -130,4 +83,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
-

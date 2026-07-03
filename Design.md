@@ -1,162 +1,102 @@
-# KBO Postseason Probability Calculator - Design Document
+# KBO 실시간 순위 및 경기 분석 예측 시스템 설계서 (Design.md)
 
-This document outlines the overall software architecture, core components, data pipelines, simulation models, and robust error-handling/normalization strategies implemented in the **KBO 가을야구 진출 확률 계산기 (KBO Postseason Probability Calculator)**.
+본 문서는 KBO 실시간 순위 분석 및 경기 승률 예측 웹 애플리케이션의 아키텍처와 주요 파일 구조, 정합성 검증 규칙, 데이터 캐싱 및 예외 처리 정책을 상세히 설명합니다.
 
 ---
 
-## 1. System Architecture Overview
+## 1. 전체 아키텍처 개요
 
-The system is designed as a **Full-Stack, Static-First Client-Side Web Application with Serverless API Proxy Services**. The core calculations are computed in the user's browser using a highly optimized Monte Carlo simulation, while the data is gathered, parsed, and normalized on a schedule via a scheduled background harvester script (`update-kbo-data.ts`).
-
-To offer live standings, scheduled daily matches, and match predictions without client-side scraping, serverless API endpoints are deployed to proxy requests securely and compute advanced prediction logic.
+본 웹앱은 **Full-Stack (Vite + React + Express)** 아키텍처를 따르며, 사용자 브라우저에서의 데이터 노출과 크롤링 수집 서버의 역할을 유기적으로 분리하여 설계되었습니다.
 
 ```
-+------------------ Scheduled Background (GitHub Actions) -------------------+
-|                                                                            |
-|  [Official KBO Website]     [MyKBOStats (Unofficial)]     [AiScore (Aux)]  |
-|           |                            |                         |         |
-|           +----------------------------+-------------------------+         |
-|                                        |                                   |
-|                                        v                                   |
-|                          [Source Manager (sourceManager.ts)]               |
-|                                        |                                   |
-|                                        v                                   |
-|                    [Snapshot Normalizer (normalizeKboSnapshot)]            |
-|                                        | (Reconcile / Align 144G Scale)    |
-|                                        v                                   |
-|                   [Standings-Based Remaining Game Generator]                |
-|                                        |                                   |
-|                                        v                                   |
-|                             [public/data/kbo-latest.json]                  |
-|                                        |                                   |
-+----------------------------------------|-----------------------------------+
-                                         |
-                                         +-----------------------------------------+
-                                         |                                         | (HTTP GET Fetch)
-                                         v                                         v
-+------------------ Vercel Serverless API Proxy Layer ----------------+  +-- Browser Runtime UI Layer --+
-|                                                                     |  |                              |
-|  [GET /api/kbo/standings]     [GET /api/kbo/today-games]            |  |    [loadKboStaticData.ts]    |
-|           |                                 |                       |  |              |               |
-|  (Detailed Standings stats)   (pitchers, lineups, predictions)      |  |              v               |
-|           \                                 /                       |  |    [App (Main Coordinator)]  |
-|            \---+---------------------------/                        |  |              |               |
-|                |                                                    |  |              v               |
-|                v                                                    |  |  [KboTodayGamesAndStandings] |
-|     [GET /api/kbo/refresh] (manual scrape trigger with 5m RateLimit)|  |  (Daily Predictions Widget)  |
-|                                                                     |  +------------------------------+
-+---------------------------------------------------------------------+
+┌────────────────────────────────────────────────────────┐
+│                      Client Layer                      │
+│   - React 18 / Tailwind CSS / Lucide React             │
+│   - KboTodayGamesAndStandings.tsx (메인 대시보드 컴포넌트)│
+│   - 실시간 정합성 검증 디버그 패널 (Integrity Check UI)  │
+└───────────────────────────┬────────────────────────────┘
+                            │ API Request (JSON)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                       API Layer                        │
+│   - Express API Routes (/api/kbo/*)                    │
+│   - standings.ts, today-games.ts, refresh.ts, etc      │
+└───────────────────────────┬────────────────────────────┘
+                            │ Service Invocation
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                     Service Layer                      │
+│   - kboDataService.ts (데이터 통합 오케스트레이터)        │
+│   - 수집원 우선순위 관리, 전수 검증, 캐싱 생명주기 제어  │
+└───────────────────────────┬────────────────────────────┘
+                            │ Data Retrieval
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                   Data Source Layer                    │
+│   - officialKboKoreanSource (KBO 공식 국문 페이지 크롤러) │
+│   - officialKboEnglishSource (KBO 영문 페이지 크롤러)     │
+│   - myKboStatsSource & aiScoreSource (보조 데이터 소스)   │
+│   - fallbackSource (로컬 예비 데이터)                  │
+└────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Core Functional Modules
+## 2. 파일 디렉터리 및 모듈 구조
 
-### A. Data Harvester & Normalizer (`/scripts/update-kbo-data.ts`)
-*   **Purpose**: Runs periodically to scrape the latest KBO team standings and schedule.
-*   **Fallback Mechanism**: If the remote servers are down or unresponsive, it falls back to the previous successful cached file (`kbo-latest.json`) or uses a bundled local asset dataset.
-*   **Snapshot Normalization (`normalizeKboSnapshot`)**: Ensures completed and remaining games match perfectly. If the parsed schedule is inconsistent with the official standings, it invokes the **Standings-Based Remaining Game Generator** to reconstruct unbiased neutral remaining slots for every team up to the 144-game scale.
+설계 원칙에 따라 하나의 파일에 로직이 집중되는 것을 방지하고, 기능별로 고도로 모듈화하여 구성했습니다.
 
-### B. Neutral Remaining Game Generator (`/src/lib/simulation/generateRemainingGamesFromStandings.ts`)
-*   **Purpose**: Dynamically maps each team's remaining game slots ($144 - \text{playedGames}$) and uses a greedy matching algorithm to balance pairings, ensuring no bias toward any team, resulting in a perfect 144-game projection for every simulated path.
-
-### C. Browser Monte Carlo Engine (`/src/lib/simulation/simulateFromStaticData.ts`)
-*   **Purpose**: Performs 10,000 to 100,000 season iterations inside a browser-safe, non-blocking asynchronous environment.
-*   **Probability Models**: Supports multiple prediction weight models (Basic Equal Chance, Cumulative Current Win Rate, and Hybrid Multi-Dimensional).
-*   **Scenario Mode Preprocessing (`/src/lib/scenario/applyScenario.ts`)**: Allows users to freeze a specific team's next $N$ games to a fixed record (e.g., 5 Wins, 3 Losses) and runs comparative simulations to display probability delta changes.
-
-### D. Serverless APIs & Prediction Processing (`/api/kbo/*`, `/src/lib/kbo/buildTodayGames.ts`)
-*   **`GET /api/kbo/standings`**: Formats and returns advanced standings statistics (including run differentials, streak details, and last-10 records).
-*   **`GET /api/kbo/today-games`**: Assembles today's games list, matches them with expected starters and lineups from configuration presets, and runs the rule-based prediction analyzer.
-*   **`GET /api/kbo/refresh`**: Triggers a manual real-time re-crawl of standings and schedules across all prioritized sources, protected by a 5-minute memory-based Rate Limiter (status 429).
+*   `src/config.ts`: 모든 환경 변수, 모델명, KBO 공식 URL, 10개 구단 메타데이터(색상, 국문명, 로고 글자 등)를 한곳에 모아 집중 관리하는 설정 파일입니다.
+*   `src/components/KboTodayGamesAndStandings.tsx`: 실시간 팀 순위와 일일 경기 승률 예측 데이터를 탭으로 제공하는 반응형 UI 컴포넌트입니다. 수집 출처 표기, 기준 일자 노출, 수동 동기화 쿨다운 제어, 무결성 디버그 패널을 탑재하고 있습니다.
+*   `src/lib/kbo/kboDataService.ts`: 비즈니스 로직과 캐시 정책을 집약한 싱글턴 서비스 레이어입니다.
+*   `src/lib/kbo/sources/`: KBO 수집원 크롤러 어댑터가 위치한 디렉터리입니다.
+    *   `officialKboKoreanSource.ts`: KBO 공식 홈페이지 국문 순위표를 cheerio 기반으로 크롤링하여 정수형으로 정확하게 추출합니다. (가장 높은 우선순위)
+    *   `officialKboEnglishSource.ts`: KBO 공식 영문 페이지 파서입니다.
+    *   `myKboStatsSource.ts` / `aiScoreSource.ts`: 공식 사이트 점검이나 우천 취소 등으로 인한 일시적 장애 대응용 보조 파서입니다.
+    *   `fallbackSource.ts`: 최악의 네트워크 단절 상황에서 조립해 주는 로컬 번들 백업 데이터셋입니다.
+    *   `sourceManager.ts`: 수집 일정 통합 관리 모듈입니다.
+*   `src/lib/kbo/cache.ts`: 파일시스템(개발 환경) 및 메모리(Vercel 서버리스 등 프로덕션 환경) 캐시를 투명하게 지원하는 어댑터 모듈입니다.
+*   `src/lib/kbo/dateUtils.ts`: 서버/클라이언트가 언제나 `Asia/Seoul` (한국 표준시, KST) 시간대를 일관되게 적용하여 하루 경계의 불일치를 차단하는 시간 유틸리티입니다.
 
 ---
 
-## 3. Visual & Component Hierarchy
+## 3. 핵심 아키텍처 메커니즘 및 정합성 검증
 
-The UI is built with desktop-first precision using **React 19**, styled with custom **Tailwind CSS**, and features smooth visual micro-interactions using **motion/react**:
+### A. 데이터 소스 획득 우선순위 (Prioritization)
+데이터 유실이나 오래된 예비 데이터의 오사용을 철저히 차단하기 위해 순위표 획득 단계에서 엄격한 우선순위를 따릅니다:
+1.  **KBO 국문 공식 데이터 (`KBO_OFFICIAL_KR`)**: 가장 최신이고 권위 있는 출처.
+2.  **KBO 영문 공식 데이터 (`KBO_OFFICIAL_EN`)**
+3.  **보조 수집원 (`FALLBACK_SOURCE`)** (MyKBO, AiScore 등)
+4.  **마지막 성공 캐시 (`LAST_SUCCESS_CACHE`)** (서버 무중단 및 임시 오류 보존용)
+5.  **로컬 번들 에셋 (`BUNDLED_FALLBACK`)**
 
-1.  **Header Indicator Area**: Displays the current calculation parameters, selected model, seed, and real-time execution statistics.
-2.  **Live Standings & Match Predictor (`KboTodayGamesAndStandings.tsx`)**:
-    *   **Interactive Tabs**: Swappable views for "당일 경기 일정 및 승률 예측" and "실시간 현재 팀 순위표".
-    *   **Accordion Cards**: Collapsible match items showing a comparison of pitcher statistics, team rosters/lineups, and prediction parameters.
-    *   **Manual Re-crawler Button**: Provides real-time sync with rate-limiting indicators.
-    *   **Gambling Disclaimer**: Highlights that calculations are for informational and analysis purposes only.
-3.  **Advanced Analytics Grid (Bento Boxes)**:
-    *   **Data Reliability Card (`DataReliabilityCard.tsx`)**: Displays a percentage confidence index based on data source freshness and schedule-to-standings integrity.
-    *   **5th Place Cutoff Card (`FifthPlaceCutoffCard.tsx`)**: Displays percentile scenarios (25%, 50%, 75%, 90%) for the wins required to secure 5th place.
-    *   **Probability Delta Card (`ProbabilityChangeCard.tsx`)**: Reflects daily changes comparing the active snapshot with the previous day's results.
-4.  **Scenario Mode Controller (`ScenarioModePanel.tsx`)**: Interactive interface to construct hypothetical records and analyze post-scenario chances.
-5.  **Team Probability Matrix (`ProbabilityCards.tsx` / `ProbabilityTable.tsx`)**: Renders team logos, current stats, remaining game counts, and postseason probability bars. Clicking a team opens the **Team Detail Panel Overlay**.
-6.  **Team Detail Overlay Panel (`TeamDetailPanel.tsx`)**: Shows the team's rank distribution heatmap, remaining matchups, target win probabilities, and postseason likelihood at specific win targets.
-7.  **Historical Rank Heatmap (`RankDistribution.tsx`)**: A fully realized color-coded matrix displaying the probability of every team finishing in positions 1st through 10th.
+### B. 캐싱 정책 & 실시간 크롤링 연계
+*   팀 순위표는 기본 TTL **10분**으로 캐싱되며, 이 기간 내에는 백엔드 리소스를 낭비하지 않고 빠르게 응답합니다.
+*   `최신 정보 크롤링 수집` 버튼을 눌러 격발하는 `/api/kbo/refresh` 요청 시, 메모리 및 파일 캐시가 완전히 퍼지(Purge)되고 데이터 소스를 실시간 강제 크롤링하여 갱신합니다.
+*   어뷰징 차단을 위해 수동 새로고침 요청은 IP/세션별로 **60초 동안의 재요청 제한(Rate Limit Cooldown)** 장치가 활성화됩니다.
 
----
-
-## 4. Key Design and Code Quality Standards
-
-*   **Type Safety**: Every shared interface, enum, and class payload is defined in `/src/types.ts` to ensure strict contract mapping.
-*   **Lazy Initialization & Fault-Tolerance**: All web scraper selectors are wrapped in try-catch structures, and division operations are guarded against division-by-zero errors.
-*   **Exhaustive Telemetry Logs**: Function executions, database state modifications, and user interactive actions are comprehensively logged to the console to enable easy debugging.
-*   **Robust Date Normalization & Partial Failure Isolation**:
-    *   **Centralized KST Date Utilities (`/src/lib/kbo/dateUtils.ts`)**: Implements strict `Asia/Seoul` timezone normalization using `Intl.DateTimeFormat`. Eliminates client-server UTC offset drift and ensures that KBO dates are consistently formatted as `YYYY-MM-DD` and converted to `YYYYMMDD` without shifting.
-    *   **Isolated API Error Boundaries**: Isolates the frontend fetching state for Team Standings and Today's Games. An API failure or data parsing glitch in the standings feed is contained within the standings tab view, preventing a total app crash and keeping the daily game scheduling/prediction board completely operational.
-    *   **Cache Eviction on Failure**: API handlers explicitly configure `Cache-Control: no-store, no-cache, must-revalidate, proxy-revalidate` for any failed operations (`success: false`). Genuine game-less days are safely cached with a standard TTL, while temporary serverless crawl hiccups are cleared instantly on reload.
-
+### C. 데이터 무결성 전수 검증 공식 (Integrity Formula)
+수집된 데이터가 오염되었거나 오래되어 경기 수가 오히려 줄어드는 버그를 사전에 탐지하기 위해, `kboDataService`와 프론트엔드 검증 패널은 다음 세 가지 전수 합치 테스트를 자동 실행합니다:
+1.  **공식 일치 검사 (`games = wins + losses + draws`)**: 10개 구단 전체에 대해 경기수가 승, 패, 무승부의 총합과 완벽히 일치하는지 전수 대조합니다. 하나라도 일치하지 않으면 해당 데이터 소스는 수집 실패 처리(Invalidate)됩니다.
+2.  **주요 구단 비정상 경기수 검사**: 리그 중반(예: 7~8월)임에도 LG, KIA, 삼성, 두산 등의 경기수가 터무니없이 적게 조회(예: 70게임 미만 등)되는 경우, 비시즌 리셋 기간이 아닌 한 오래된 Stale 데이터로 조기 판정하여 캐시 오버라이트를 철저히 격리 차단합니다.
+3.  **최신 데이터 우선 원칙 (Anti-Degradation)**: 새로 가져온 standings의 구단별 총 경기수 합산이 이미 캐시에 보관 중인 경기수 합산보다 작으면, 데이터가 퇴화한 것으로 보고 최신 캐시 데이터를 그대로 보존하며 `stale=true` 플래그와 `STALE_STANDINGS_SOURCE` 경고를 달아 반환합니다.
 
 ---
 
-## 5. Advanced Rule-Based Prediction Engine (`/src/lib/kbo/predictionEngine.ts`)
+## 4. 프론트엔드 실시간 무결성 검증 디버그 패널
 
-To ensure robust and highly analytical game outcomes without relying on unstable offline ML networks or paid APIs, we implement a **Multi-Factor Rule-Based Deterministic Scoring Model** combining 5 key dimension metrics:
+구동 중인 웹 화면의 `실시간 현재 팀 순위표` 탭 하단에 **[실시간 데이터 검증]** 대시보드를 추가 탑재했습니다.
 
-### A. Team Base Strength (25% Weight)
-*   **Formula**:
-    $$\text{teamBaseScore} = \text{seasonWinPct} \times 0.55 + \text{pythagoreanWinPct} \times 0.35 + \text{normalizedRunDiff} \times 0.10$$
-*   **Pythagorean Win Rate**:
-    $$\text{pythagoreanWinPct} = \frac{\text{runs}^{1.83}}{\text{runs}^{1.83} + \text{runsAllowed}^{1.83}}$$
-*   **Run Differential Normalization**: Normalizes season runs differential ($\text{runs} - \text{runsAllowed}$) within a KBO-realistic window of $[-150, 150]$ to a standard $[0, 1]$ scale.
-
-### B. Recent 10-Game Trend (15% Weight)
-*   Extracts the team's true recent form based on actual completed match histories ($P(\text{Win}) = \frac{\text{last10Wins}}{10}$).
-*   Fallback: If 10-game history is missing, defaults gracefully to the season win rate with a telemetry alert and down-grades prediction confidence.
-
-### C. Starting Pitcher Matchup (30% Weight)
-*   **Formula**:
-    $$\text{pitcherScore} = \text{normEra} \times 0.40 + \text{normWhip} \times 0.25 + \text{pitcherWinPct} \times 0.20 + \text{normInnings} \times 0.15$$
-*   **Era Normalization (Lower is Better)**: Standardized between $2.00$ (best) and $7.00$ (worst).
-*   **Whip Normalization (Lower is Better)**: Standardized between $1.00$ and $1.80$.
-*   **Innings Normalization (Higher is Better)**: Standardized between $40$ and $180$.
-*   **Recent Form**: If `recentEra` (last 3 matches) is available, it overrides the career season average to represent live momentum.
-
-### D. Lineup 화력 (15% Weight)
-*   Evaluated via a 4-tier fallback model:
-    1.  **Tier 1**: Cumulative average OPS of the 9-man confirmed/expected active batting lineup.
-    2.  **Tier 2**: Cumulative Season Team OPS.
-    3.  **Tier 3**: Cumulative Season Team Batting Average.
-    4.  **Tier 4**: Neutral KBO standard average ($0.500$).
-
-### E. Bullpen Stability (5% Weight)
-*   Calculated based on the bullpen-specific ERA normalized against the league standard $[2.50, 6.50]$.
-*   *Note: Includes a TODO anchor for a dynamic pitch-count fatigue load index in subsequent minor releases.*
-
-### F. Elo Rating & Home Advantage (10% Weight)
-*   **Elo Formula**:
-    $$\text{teamElo} = 1500 + (\text{seasonWinPct} - 0.5) \times 400$$
-    *   *Home team receives a standard $+25$ point advantage booster to their Elo rating prior to match simulation.*
-*   **Elo Winning Expectation**:
-    $$P_{\text{Elo}} = \frac{1}{1 + 10^{\frac{\text{opponentElo} - \text{teamElo}}{400}}}$$
-*   **Final Home Advantage**: Direct $+0.03$ addition to the home team's overall combined score prior to percentage scaling.
+*   **LG 트윈스 소화 경기수 실시간 추적**: 어제 일자 기준의 누적 경기 소화량(예: 80경기)을 직관적으로 확인하여 데이터 오차가 발생하지 않는지 투명하게 검증합니다.
+*   **전체 10개 구단 총 경기수 모니터링**: 리그 전체 구단이 소화한 총 누적 경기수를 합산하여, 비정상적인 데이터 퇴화가 발생하는지 실시간 감지합니다.
+*   **정합성 공식 검증 여부 실시간 전수 판정**: `games = wins + losses + draws` 가 정확히 만족하는지 `🟢 검증 합격` 또는 `🔴 검증 불합격`으로 상태를 일목요연하게 표시합니다.
+*   **구단별 경기수 정합성 상세 분석**: 10개 구단 각각의 수집 경기수가 합격선(OK) 내에 안착했는지 개별 그리드 뱃지를 통해 한눈에 디버깅할 수 있습니다.
 
 ---
 
-## 6. Full-Stack Production Container Router (`/server.ts`)
+## 5. 로그 기록 정책 (Logging Policy)
 
-In contrast to pure static SPAs or standard Vite setups that produce 404s when attempting serverless execution inside a standard Cloud Run container, our workspace leverages an **Express + Vite unified full-stack architecture**:
-
-*   **Integrated API Layer**: Integrates all `/api/kbo/*` serverless files inside Express router endpoints using a custom Vercel adapter middleware (`adaptHandler`).
-*   **Zero-Overhead Bundling**: During the production build pipeline (`npm run build`), the server entry point `/server.ts` is compiled into a single, optimized CJS bundle at `/dist/server.cjs` via `esbuild`.
-*   **Dual Mode Asset Serving**:
-    *   *Development*: Vite middleware processes asset pipeline and fast HMR routing.
-    *   *Production*: Node directly serves optimized assets from `/dist/` and runs SPA fallback routing for any non-API address requests.
-
+안정적인 유지 보수와 문제 해결을 위해 시스템 내의 모든 핵심 이벤트와 함수 호출은 **의미 있는 상세 콘솔 로그**를 상세하게 생성합니다:
+*   `[KboTodayGamesAndStandings] [CALL] fetchStandingsData`: API 호출 시작 및 응답 수집 시점 기록
+*   `[kboDataService] Cache check...` / `[kboDataService] Successfully wrote JSON backup...` 등 서버측 캐시 흐름 제어 기록
+*   `[KBO_STANDINGS_DEBUG]`: 호출 일자, 한국시간 기준 오늘 날짜, 최종 선택된 수집 출처 명칭, 실제 활용된 데이터 세부 현황 등을 주기적으로 출력하여 장애 복구를 가속화합니다.

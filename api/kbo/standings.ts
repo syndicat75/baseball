@@ -1,13 +1,16 @@
 /**
  * @file standings.ts
  * @description KBO 리그 팀 순위표 정보 제공 Vercel Serverless API 엔드포인트입니다.
- * 득점, 실점, 연승/연패, 최근 10경기 및 게임차 등 확장된 세부 통계(TeamStanding[])를 계산하여 캐싱한 뒤 반환합니다.
+ * 
+ * 주요 수정 사항:
+ * 1. 로컬 정적 JSON 파일 로드 방식 대신 최신 `getUnifiedKboData` 연동 서비스 적용
+ * 2. 1순위 KBO 공식 국문 순위 데이터 우선순위 보장
+ * 3. 10분 캐싱 정책 적용 및 수집 상태(stale, source, fallbackUsed) 세부 반환
+ * 4. 실패 또는 비정상 규격 데이터 원천 차단 및 무결성 검증 통과 데이터만 노출
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as fs from 'fs';
-import * as path from 'path';
-import { fallbackSource } from '../../src/lib/kbo/sources/fallbackSource';
+import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
 import { calculateDetailedStandings } from '../../src/lib/kbo/statsCalculator';
 import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
 
@@ -34,89 +37,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    let safeDirname = '';
-    try {
-      safeDirname = __dirname;
-    } catch {
-      safeDirname = process.cwd();
-    }
-
-    const findDataPath = (fileName: string): string | null => {
-      console.log(`[api/kbo/standings] [CALL] findDataPath for: "${fileName}"`);
-      const candidates = [
-        path.join(process.cwd(), 'public', 'data', fileName),
-        path.join(process.cwd(), 'data', fileName),
-        path.join(safeDirname, '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, 'public', 'data', fileName),
-        path.join(safeDirname, 'data', fileName),
-        path.join('/var/task', 'public', 'data', fileName),
-      ];
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          console.log(`[api/kbo/standings] Found file at: ${p}`);
-          return p;
-        }
-      }
-      return null;
-    };
-
-    let dataPath = findDataPath(`kbo-${targetDate}.json`);
-
-    if (!dataPath) {
-      console.log(`[api/kbo/standings] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
-      dataPath = findDataPath('kbo-latest.json');
-    }
-
-    let kboData: any;
-
-    if (dataPath && fs.existsSync(dataPath)) {
-      const rawData = fs.readFileSync(dataPath, 'utf-8');
-      kboData = JSON.parse(rawData);
-    } else {
-      console.warn('[api/kbo/standings] JSON 파일 누락. 로컬 예비 데이터 생성.');
-      const fallbackStandings = await fallbackSource.getStandings();
-      const fallbackSchedule = await fallbackSource.getSchedule();
-      kboData = {
-        asOfDate: todayStr,
-        primarySource: 'bundled-fallback',
-        sourceLabel: '번들 로컬 예비 데이터',
-        standings: fallbackStandings,
-        completedGames: fallbackSchedule.completedGames || [],
-        remainingGames: fallbackSchedule.remainingGames || [],
-      };
-    }
+    // 통합 데이터 획득 (stale/fallback 자동 연동)
+    const kboData = await getUnifiedKboData(targetDate, false);
 
     const rawStandings = kboData.standings || [];
     const completedGames = kboData.completedGames || [];
-    const fetchedAt = kboData.fetchedAt || new Date().toISOString();
+    const fetchedAt = kboData.updatedAt || new Date().toISOString();
 
     if (!rawStandings || rawStandings.length === 0) {
       throw new Error('수집된 순위 데이터가 비어 있습니다.');
     }
 
+    // 득점, 실점, 최근 10경기, 연승/연패 및 게임차 등 확장된 세부 통계 계산
     const detailedStandings = calculateDetailedStandings(rawStandings, completedGames, fetchedAt);
 
-    // 성공한 경우에만 30분 캐시 (s-maxage=1800)
-    res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=600');
+    // 성공한 경우에만 10분 동안 캐시 (s-maxage=600)
+    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=300');
 
     const response = {
       success: true,
       date: targetDate,
       kboDate: kboDateStr,
-      source: kboData.primarySource || 'static-json',
-      sourceLabel: kboData.sourceLabel || '예약 수집 JSON 데이터',
-      asOfDate: kboData.asOfDate || todayStr,
+      source: kboData.source,
+      sourceLabel: kboData.sourceLabel,
+      asOfDate: kboData.asOfDate,
       updatedAt: fetchedAt,
+      stale: kboData.stale,
+      fallbackUsed: kboData.fallbackUsed,
+      warnings: kboData.warnings,
       standings: detailedStandings,
     };
 
-    console.log(`[api/kbo/standings] [SUCCESS] Mapped ${detailedStandings.length} standings for ${targetDate}`);
+    console.log(`[api/kbo/standings] [SUCCESS] Compiled ${detailedStandings.length} detailed standings for ${targetDate}`);
     return res.status(200).json(response);
   } catch (err: any) {
     console.error('[api/kbo/standings] [ERROR] 순위표 데이터 구축 실패:', err);
-    // 실패 시 브라우저 및 프록시 캐시 금지 지정
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     return res.status(500).json({
       success: false,
@@ -128,4 +83,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
-
