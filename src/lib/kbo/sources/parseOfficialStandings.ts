@@ -10,15 +10,15 @@ import { CONFIG } from '../../../config';
 // 구단 식별을 위한 별칭 매핑 정의
 export const TEAM_ALIASES: Record<string, string[]> = {
   "LG": ["LG", "LG Twins", "LG 트윈스", "엘지"],
-  "두산": ["DOOSAN", "Doosan", "Doosan Bears", "두산", "두산 베어스"],
+  "DOOSAN": ["DOOSAN", "Doosan", "Doosan Bears", "두산", "두산 베어스"],
   "KIA": ["KIA", "Kia", "Kia Tigers", "KIA Tigers", "KIA 타이거즈"],
-  "삼성": ["SAMSUNG", "Samsung", "Samsung Lions", "삼성", "삼성 라이온즈"],
+  "SAMSUNG": ["SAMSUNG", "Samsung", "Samsung Lions", "삼성", "삼성 라이온즈"],
   "SSG": ["SSG", "SSG Landers", "SSG 랜더스"],
   "KT": ["KT", "KT Wiz", "KT 위즈"],
-  "롯데": ["LOTTE", "Lotte", "Lotte Giants", "롯데", "롯데 자이언츠"],
-  "한화": ["HANWHA", "Hanwha", "Hanwha Eagles", "한화", "한화 이글스"],
+  "LOTTE": ["LOTTE", "Lotte", "Lotte Giants", "롯데", "롯데 자이언츠"],
+  "HANWHA": ["HANWHA", "Hanwha", "Hanwha Eagles", "한화", "한화 이글스"],
   "NC": ["NC", "NC Dinos", "NC 다이노스"],
-  "키움": ["KIWOOM", "Kiwoom", "Kiwoom Heroes", "키움", "키움 히어로즈"]
+  "KIWOOM": ["KIWOOM", "Kiwoom", "Kiwoom Heroes", "키움", "키움 히어로즈"]
 };
 
 /**
@@ -93,14 +93,20 @@ export async function parseOfficialStandings(): Promise<OfficialTeamStanding[]> 
   // 페이지 상의 모든 테이블들을 찾아서 헤더 종류에 맞게 파싱 진행
   $('table').each((tableIdx, tableElem) => {
     const $table = $(tableElem);
-    const headers = $table.find('thead tr th').map((_, th) => $(th).text().trim().toUpperCase()).get();
+    const headers = $table.find('thead tr th').map((_, th) => {
+      const $thClone = $(th).clone();
+      $thClone.find('a').remove();
+      return $thClone.text().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+    }).get();
     
     console.log(`[parseOfficialStandings] Table index ${tableIdx} headers: ${JSON.stringify(headers)}`);
     
     // 1. 기본 순위표 테이블 판별 (GAMES, W, L, D, PCT, GB 등이 컬럼에 포함됨)
     if (headers.includes('GAMES') && headers.includes('W') && headers.includes('L') && headers.includes('PCT')) {
       $table.find('tbody tr').each((_, trElem) => {
-        const tds = $(trElem).find('td').map((_, td) => $(td).text().trim()).get();
+        const tds = $(trElem).find('td').map((_, td) => {
+          return $(td).text().replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
+        }).get();
         if (tds.length < 7) return; // 유효하지 않은 행 무시
         
         const rankVal = parseInt(tds[0], 10) || 0;
@@ -285,8 +291,20 @@ export async function parseOfficialStandings(): Promise<OfficialTeamStanding[]> 
     }
   }
   
-  // 순위 오름차순으로 정렬해서 반환
-  standingsList.sort((a, b) => a.rank - b.rank);
+  // 순위 정렬 규칙:
+  // 1. rank가 존재하면 (1~10 범위 내의 값인 경우) rank 기준으로 최우선 오름차순 정렬
+  // 2. rank가 동일하거나 없을 때만 winningPct 기준으로 내림차순 정렬
+  // 3. games, wins 등의 기준으로는 절대 정렬하지 않음
+  standingsList.sort((a, b) => {
+    const aRank = a.rank && a.rank > 0 && a.rank <= 10 ? a.rank : 99;
+    const bRank = b.rank && b.rank > 0 && b.rank <= 10 ? b.rank : 99;
+
+    if (aRank !== bRank) {
+      return aRank - bRank;
+    }
+    // rank가 동일하거나 유효하지 않은 경우, 승률(winningPct) 기준 내림차순 정렬
+    return b.winningPct - a.winningPct;
+  });
   
   console.log(`[parseOfficialStandings] [SUCCESS] parseOfficialStandings complete. LG Games: ${standingsList.find(t => t.teamName === 'LG')?.games}`);
   return standingsList;

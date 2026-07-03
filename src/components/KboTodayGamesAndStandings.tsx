@@ -76,6 +76,28 @@ export function KboTodayGamesAndStandings() {
   // 아코디언 상태 추적 (gameId -> boolean)
   const [expandedGames, setExpandedGames] = useState<Record<string, boolean>>({});
 
+  // KBO 선발투수/경기상세 상태 추가
+  const [gameDetails, setGameDetails] = useState<Record<string, {
+    awayStarter: any | null;
+    homeStarter: any | null;
+    missingData: string[];
+  }>>({});
+  const [isDetailsLoading, setIsDetailsLoading] = useState<boolean>(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [gameDetailsMeta, setGameDetailsMeta] = useState<{
+    source: string;
+    updatedAt: string;
+  } | null>(null);
+
+  // KBO 경기별 승률예측 상태 추가
+  const [predictions, setPredictions] = useState<Record<string, any>>({});
+  const [isPredictionsLoading, setIsPredictionsLoading] = useState<boolean>(false);
+  const [predictionsError, setPredictionsError] = useState<string | null>(null);
+  const [predictionsMeta, setPredictionsMeta] = useState<{
+    modelVersion: string;
+    updatedAt: string;
+  } | null>(null);
+
   /**
    * @function fetchStandingsData
    * @description 백엔드 API인 /api/kbo/standings?date=... 로부터 실시간 팀 순위표를 가져와 설정합니다.
@@ -113,23 +135,103 @@ export function KboTodayGamesAndStandings() {
   };
 
   /**
+   * @function fetchGameDetailsData
+   * @description 백엔드 API인 /api/kbo/game-details?date=... 로부터 선발투수 세부 데이터를 가져옵니다.
+   */
+  const fetchGameDetailsData = async (dateStr: string, forceRefresh = false) => {
+    console.log(`[KboTodayGamesAndStandings] [CALL] fetchGameDetailsData - date: "${dateStr}", forceRefresh: ${forceRefresh}`);
+    setIsDetailsLoading(true);
+    setDetailsError(null);
+    try {
+      const url = `/api/kbo/game-details?date=${dateStr}${forceRefresh ? '&refresh=true' : ''}`;
+      const result = await safeFetchJson<any>(url);
+      if (!result.ok || !result.data) {
+        throw new Error(result.message || '선발투수 데이터를 수집하지 못했습니다.');
+      }
+      
+      const data = result.data;
+      if (data.success && data.details) {
+        const detailsMap: Record<string, any> = {};
+        data.details.forEach((d: any) => {
+          detailsMap[d.gameId] = {
+            awayStarter: d.awayStarter,
+            homeStarter: d.homeStarter,
+            missingData: d.missingData || []
+          };
+        });
+        setGameDetails(detailsMap);
+        setGameDetailsMeta({
+          source: data.source || 'MYKBO_UNOFFICIAL',
+          updatedAt: data.updatedAt || new Date().toISOString()
+        });
+        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchGameDetailsData - Mapped ${data.details.length} games details.`);
+      } else {
+        throw new Error(data.message || '선발투수 데이터를 수집하지 못했습니다.');
+      }
+    } catch (err: any) {
+      console.warn('[KboTodayGamesAndStandings] fetchGameDetailsData 실패:', err);
+      setDetailsError(err.message || '선발투수 데이터를 불러오지 못했습니다.');
+    } finally {
+      setIsDetailsLoading(false);
+    }
+  };
+
+  /**
+   * @function fetchPredictionsData
+   * @description 백엔드 API인 /api/kbo/predictions?date=... 로부터 경기별 규칙 기반 승률 예측 데이터를 가져옵니다.
+   */
+  const fetchPredictionsData = async (dateStr: string, forceRefresh = false) => {
+    console.log(`[KboTodayGamesAndStandings] [CALL] fetchPredictionsData - date: "${dateStr}", forceRefresh: ${forceRefresh}`);
+    setIsPredictionsLoading(true);
+    setPredictionsError(null);
+    try {
+      const url = `/api/kbo/predictions?date=${dateStr}${forceRefresh ? '&refresh=true' : ''}`;
+      const result = await safeFetchJson<any>(url);
+      if (!result.ok || !result.data) {
+        throw new Error(result.message || '승률 예측 데이터를 가져오지 못했습니다.');
+      }
+      
+      const data = result.data;
+      if (data.success && data.predictions) {
+        const predsMap: Record<string, any> = {};
+        data.predictions.forEach((p: any) => {
+          predsMap[p.gameId] = p;
+        });
+        setPredictions(predsMap);
+        setPredictionsMeta({
+          modelVersion: data.modelVersion || 'rule-based-v1',
+          updatedAt: data.updatedAt || new Date().toISOString()
+        });
+        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchPredictionsData - Mapped ${data.predictions.length} predictions.`);
+      } else {
+        throw new Error(data.message || '승률 예측 데이터 조회 실패');
+      }
+    } catch (err: any) {
+      console.warn('[KboTodayGamesAndStandings] fetchPredictionsData 실패:', err);
+      setPredictionsError(err.message || '승률 예측 데이터를 불러오지 못했습니다.');
+    } finally {
+      setIsPredictionsLoading(false);
+    }
+  };
+
+  /**
    * @function fetchTodayGamesData
    * @description 백엔드 API인 /api/kbo/today-games?date=... 로부터 경기 일정 데이터를 가져오고,
-   * 세부 승률 예측 및 선발투수 정보는 /api/kbo/predictions?date=... 로 백그라운드 지연 로딩합니다.
+   * 세부 선발투수 정보는 /api/kbo/game-details?date=... 로 백그라운드 지연 로딩합니다.
    */
-  const fetchTodayGamesData = async (dateStr: string) => {
-    console.log(`[KboTodayGamesAndStandings] [CALL] fetchTodayGamesData - date: "${dateStr}"`);
+  const fetchTodayGamesData = async (dateStr: string, forceRefresh = false) => {
+    console.log(`[KboTodayGamesAndStandings] [CALL] fetchTodayGamesData - date: "${dateStr}", forceRefresh: ${forceRefresh}`);
     setIsGamesLoading(true);
     setGamesError(null);
     try {
       const result = await safeFetchJson<any>(`/api/kbo/today-games?date=${dateStr}`);
       if (!result.ok || !result.data) {
-        throw new Error(result.message || '일정 서버 응답 오류');
+        throw new Error(result.message || '공식 KBO 일정 페이지 수집 또는 파싱에 실패했습니다.');
       }
       
       const data = result.data;
       if (data.success === false) {
-        throw new Error(data.message || data.error || '공식 KBO 스코어보드 수집 또는 파싱에 실패했습니다.');
+        throw new Error(data.message || data.error || '공식 KBO 일정 페이지 수집 또는 파싱에 실패했습니다.');
       }
 
       if (data && data.games) {
@@ -166,33 +268,11 @@ export function KboTodayGamesAndStandings() {
         });
         setExpandedGames(initialExpanded);
 
-        // 일정이 1경기 이상 있을 때만 백그라운드 예측 및 선발 분석 로딩 개시
+        // 일정이 1경기 이상 있을 때만 백그라운드 선발 분석 및 승률 예측 로딩 개시
         if (uniqueGames.length > 0) {
-          console.log(`[KboTodayGamesAndStandings] Triggering background lazy-load for predictions on date: "${dateStr}"`);
-          safeFetchJson<any>(`/api/kbo/predictions?date=${dateStr}`)
-            .then((predResult) => {
-              if (predResult.ok && predResult.data && predResult.data.success && predResult.data.predictions) {
-                const preds = predResult.data.predictions;
-                setGames((currentGames) =>
-                  currentGames.map((g) => {
-                    const foundPred = preds.find((p: any) => p.gameId === g.gameId);
-                    if (foundPred) {
-                      return {
-                        ...g,
-                        awayStarter: foundPred.awayStarter || g.awayStarter,
-                        homeStarter: foundPred.homeStarter || g.homeStarter,
-                        prediction: foundPred.prediction
-                      };
-                    }
-                    return g;
-                  })
-                );
-                console.log(`[KboTodayGamesAndStandings] [SUCCESS] Lazy-loaded and merged ${preds.length} predictions and starter pitchers.`);
-              }
-            })
-            .catch((predErr) => {
-              console.warn(`[KboTodayGamesAndStandings] Non-blocking lazy-load prediction failed:`, predErr);
-            });
+          console.log(`[KboTodayGamesAndStandings] Triggering background lazy-load for game details and predictions on date: "${dateStr}"`);
+          fetchGameDetailsData(dateStr, forceRefresh);
+          fetchPredictionsData(dateStr, forceRefresh);
         }
       }
     } catch (err: any) {
@@ -236,10 +316,10 @@ export function KboTodayGamesAndStandings() {
       console.log('[KboTodayGamesAndStandings] Server re-crawled successfully.');
       setRefreshMessage(`KBO 공식 실시간 데이터 수집 성공! (갱신 소요: ${data.durationMs}ms)`);
       
-      // 최신 데이터 가져오기 재수행
+      // 최신 데이터 가져오기 재수행 (선발 및 일정 강제 무효화)
       await Promise.all([
         fetchStandingsData(targetDate),
-        fetchTodayGamesData(targetDate)
+        fetchTodayGamesData(targetDate, true)
       ]);
     } catch (err: any) {
       console.error('[KboTodayGamesAndStandings] handleManualRefresh 실패:', err);
@@ -439,7 +519,9 @@ export function KboTodayGamesAndStandings() {
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-600" />
                   <div className="space-y-1">
                     <p className="text-sm font-bold">경기 일정 데이터를 불러오지 못했습니다.</p>
-                    <p className="text-xs text-rose-600 font-semibold leading-relaxed">{gamesError}</p>
+                    <p className="text-xs text-rose-600 font-semibold leading-relaxed">
+                      공식 KBO 일정 페이지 수집 또는 파싱에 실패했습니다. (원인: {gamesError})
+                    </p>
                   </div>
                 </div>
                 <div className="pt-1 flex items-center gap-2">
@@ -460,7 +542,7 @@ export function KboTodayGamesAndStandings() {
             ) : games.length === 0 ? (
               <div className="py-12 text-center text-slate-400 border-2 border-dashed border-slate-100 rounded-xl space-y-1">
                 <Calendar className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                <p className="text-sm font-bold text-slate-600">선택하신 날짜({targetDate})에는 예정된 KBO 경기가 존재하지 않습니다.</p>
+                <p className="text-sm font-bold text-slate-600">선택하신 날짜에는 예정된 KBO 경기가 없습니다.</p>
                 <p className="text-[11px] text-slate-400 font-medium">프로야구 미편성 기간이거나 월요일(휴식일) 혹은 우천 취소된 일정일 수 있습니다.</p>
               </div>
             ) : (
@@ -468,8 +550,9 @@ export function KboTodayGamesAndStandings() {
                 
                 {games.map((g) => {
                   const isExpanded = !!expandedGames[g.gameId];
-                  const awayWinPct = g.prediction ? Math.round(g.prediction.awayWinProbability * 100) : 50;
-                  const homeWinPct = g.prediction ? Math.round(g.prediction.homeWinProbability * 100) : 50;
+                  const pred = predictions[g.gameId];
+                  const awayWinPct = pred ? pred.awayWinProbability : 50;
+                  const homeWinPct = pred ? pred.homeWinProbability : 50;
 
                   return (
                     <div 
@@ -518,22 +601,43 @@ export function KboTodayGamesAndStandings() {
                           </div>
 
                           {/* Prediction probability slider */}
-                          <div className="flex flex-col items-center flex-1 max-w-[160px] md:max-w-[200px] gap-1.5">
-                            <div className="w-full h-2 rounded-full bg-slate-100 flex overflow-hidden border border-slate-200">
-                              <div 
-                                className={`${getTeamColor(g.awayTeam)} h-full transition-all duration-500`}
-                                style={{ width: `${awayWinPct}%` }}
-                              />
-                              <div 
-                                className={`${getTeamColor(g.homeTeam)} h-full transition-all duration-500`}
-                                style={{ width: `${homeWinPct}%` }}
-                              />
-                            </div>
-                            <div className="w-full flex items-center justify-between text-[11px] font-extrabold text-slate-600 font-mono">
-                              <span className={awayWinPct > homeWinPct ? 'text-rose-600 font-black' : ''}>{awayWinPct}%</span>
-                              <span className="text-[10px] font-black text-slate-400">vs</span>
-                              <span className={homeWinPct > awayWinPct ? 'text-blue-600 font-black' : ''}>{homeWinPct}%</span>
-                            </div>
+                          <div className="flex flex-col items-center flex-1 max-w-[160px] md:max-w-[200px] gap-1">
+                            {isPredictionsLoading ? (
+                              <div className="flex flex-col items-center gap-1.5 w-full">
+                                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden relative">
+                                  <div className="absolute top-0 bottom-0 left-0 w-1/2 bg-blue-400 animate-pulse rounded-full" />
+                                </div>
+                                <span className="text-[9px] text-slate-400 font-bold font-mono animate-pulse">승률예측 계산 중...</span>
+                              </div>
+                            ) : predictionsError ? (
+                              <div className="flex flex-col items-center gap-0.5 w-full">
+                                <div className="w-full h-1.5 bg-rose-50 border border-rose-100 rounded-full" />
+                                <span className="text-[9px] text-rose-400 font-extrabold leading-none">예측 로드 실패</span>
+                              </div>
+                            ) : !pred || pred.confidence === '예측 보류' ? (
+                              <div className="flex flex-col items-center gap-0.5 w-full">
+                                <div className="w-full h-1.5 bg-slate-100 rounded-full" />
+                                <span className="text-[9px] text-slate-400 font-extrabold font-mono">예측 보류 (50% vs 50%)</span>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="w-full h-2 rounded-full bg-slate-100 flex overflow-hidden border border-slate-200">
+                                  <div 
+                                    className={`${getTeamColor(g.awayTeam)} h-full transition-all duration-500`}
+                                    style={{ width: `${awayWinPct}%` }}
+                                  />
+                                  <div 
+                                    className={`${getTeamColor(g.homeTeam)} h-full transition-all duration-500`}
+                                    style={{ width: `${homeWinPct}%` }}
+                                  />
+                                </div>
+                                <div className="w-full flex items-center justify-between text-[11px] font-extrabold text-slate-600 font-mono">
+                                  <span className={awayWinPct > homeWinPct ? 'text-rose-600 font-black' : ''}>{awayWinPct}%</span>
+                                  <span className="text-[10px] font-black text-slate-400">vs</span>
+                                  <span className={homeWinPct > awayWinPct ? 'text-blue-600 font-black' : ''}>{homeWinPct}%</span>
+                                </div>
+                              </>
+                            )}
                           </div>
 
                           {/* Home Team */}
@@ -558,78 +662,148 @@ export function KboTodayGamesAndStandings() {
                           
                           {/* 1. Starter Pitcher Duel Grid */}
                           <div className="space-y-2">
-                            <h4 className="font-extrabold text-slate-800 flex items-center gap-1.5 pb-1 border-b border-dashed border-slate-200">
-                              <User className="w-4 h-4 text-blue-600" />
-                              예상 선발투수 스탯 바 비교 (Starter Matchup)
-                            </h4>
-                            
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1.5">
-                              {/* Left: Away Starter */}
-                              <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-2 shadow-sm">
-                                <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                                  <span className="font-extrabold text-slate-800">{g.awayStarter?.name || '투수 정보 없음'}</span>
-                                  <span className={`text-[10px] text-white font-bold px-2 py-0.5 rounded-full ${getTeamColor(g.awayTeam)}`}>
-                                    {getTeamNameKo(g.awayTeam)} 선발
-                                  </span>
-                                </div>
-                                
-                                {g.awayStarter ? (
-                                  <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-medium text-slate-600 font-mono">
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">승-패</span>
-                                      <strong className="text-slate-800 font-extrabold">{g.awayStarter.wins}승 {g.awayStarter.losses}패</strong>
-                                    </div>
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">시즌 ERA</span>
-                                      <strong className="text-rose-600 font-black">{g.awayStarter.era.toFixed(2)}</strong>
-                                    </div>
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">WHIP / 삼진</span>
-                                      <strong className="text-slate-800 font-bold">{g.awayStarter.whip.toFixed(2)} / {g.awayStarter.strikeouts}K</strong>
-                                    </div>
-                                    <div className="col-span-3 pt-1 border-t border-slate-50 text-[10px] text-left text-slate-500 font-sans flex items-center gap-1">
-                                      <Activity className="w-3.5 h-3.5 text-slate-400" />
-                                      <span>최근 3경기 가상 가중 ERA: <strong>{g.awayStarter.recentEra.toFixed(2)}</strong></span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <p className="text-slate-400 text-center py-2">등록된 선발 스탯이 부재하여 구단 평균 지표가 활용됩니다.</p>
-                                )}
-                              </div>
-
-                              {/* Right: Home Starter */}
-                              <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-2 shadow-sm">
-                                <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                                  <span className={`text-[10px] text-white font-bold px-2 py-0.5 rounded-full ${getTeamColor(g.homeTeam)}`}>
-                                    {getTeamNameKo(g.homeTeam)} 선발
-                                  </span>
-                                  <span className="font-extrabold text-slate-800">{g.homeStarter?.name || '투수 정보 없음'}</span>
-                                </div>
-
-                                {g.homeStarter ? (
-                                  <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-medium text-slate-600 font-mono">
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">승-패</span>
-                                      <strong className="text-slate-800 font-extrabold">{g.homeStarter.wins}승 {g.homeStarter.losses}패</strong>
-                                    </div>
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">시즌 ERA</span>
-                                      <strong className="text-rose-600 font-black">{g.homeStarter.era.toFixed(2)}</strong>
-                                    </div>
-                                    <div>
-                                      <span className="block text-[10px] text-slate-400 font-bold mb-0.5">WHIP / 삼진</span>
-                                      <strong className="text-slate-800 font-bold">{g.homeStarter.whip.toFixed(2)} / {g.homeStarter.strikeouts}K</strong>
-                                    </div>
-                                    <div className="col-span-3 pt-1 border-t border-slate-50 text-[10px] text-left text-slate-500 font-sans flex items-center gap-1">
-                                      <Activity className="w-3.5 h-3.5 text-slate-400" />
-                                      <span>최근 3경기 가상 가중 ERA: <strong>{g.homeStarter.recentEra.toFixed(2)}</strong></span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <p className="text-slate-400 text-center py-2">등록된 선발 스탯이 부재하여 구단 평균 지표가 활용됩니다.</p>
-                                )}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-dashed border-slate-200">
+                              <h4 className="font-extrabold text-slate-800 flex items-center gap-1.5">
+                                <User className="w-4 h-4 text-blue-600" />
+                                선발투수 정보 (Starting Pitcher Info)
+                              </h4>
+                              <div className="flex items-center gap-1 text-[10px] text-slate-400 font-medium">
+                                <Info className="w-3.5 h-3.5" />
+                                <span>선발투수 정보는 비공식 보조 데이터 기준입니다.</span>
                               </div>
                             </div>
+                            
+                            {isDetailsLoading ? (
+                              /* 선발투수 로딩 중 스켈레톤 */
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1.5 animate-pulse">
+                                <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-3 shadow-sm">
+                                  <div className="h-4 bg-slate-100 rounded w-1/3" />
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                  </div>
+                                </div>
+                                <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-3 shadow-sm">
+                                  <div className="h-4 bg-slate-100 rounded w-1/3" />
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                    <div className="h-6 bg-slate-100 rounded" />
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (() => {
+                              const details = gameDetails[g.gameId];
+                              const missingData = details?.missingData || [];
+                              const isUnannounced = missingData.includes("선발투수 미발표");
+                              const isFetchFailed = missingData.includes("선발투수 수집 실패");
+
+                              if (isUnannounced) {
+                                return (
+                                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg text-center text-slate-500 font-bold flex flex-col items-center justify-center gap-1 py-5">
+                                    <AlertCircle className="w-5 h-5 text-slate-400" />
+                                    <span className="text-xs">양 팀 선발투수 미발표</span>
+                                    <span className="text-[10px] text-slate-400 font-normal">KBO 공식 발표 전이거나, MyKBOStats에 등록되지 않았습니다.</span>
+                                  </div>
+                                );
+                              }
+
+                              if (isFetchFailed || (!details?.awayStarter && !details?.homeStarter)) {
+                                return (
+                                  <div className="bg-rose-50/50 border border-rose-100 p-4 rounded-lg text-center text-rose-600 font-bold flex flex-col items-center justify-center gap-1 py-5">
+                                    <AlertCircle className="w-5 h-5 text-rose-400" />
+                                    <span className="text-xs">선발투수 정보 수집 실패</span>
+                                    <span className="text-[10px] text-rose-400 font-normal">데이터 소스 연결 장애 또는 정보 수집 중 에러가 발생했습니다.</span>
+                                  </div>
+                                );
+                              }
+
+                              const awayStarter = details.awayStarter;
+                              const homeStarter = details.homeStarter;
+
+                              return (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1.5">
+                                  {/* Left: Away Starter */}
+                                  <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-2 shadow-sm">
+                                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                                      <span className="font-extrabold text-slate-800">{awayStarter?.name || '투수 정보 없음'}</span>
+                                      <span className={`text-[10px] text-white font-bold px-2 py-0.5 rounded-full ${getTeamColor(g.awayTeam)}`}>
+                                        {getTeamNameKo(g.awayTeam)} 선발
+                                      </span>
+                                    </div>
+                                    
+                                    {awayStarter ? (
+                                      <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-medium text-slate-600 font-mono">
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">승-패</span>
+                                          <strong className="text-slate-800 font-extrabold">
+                                            {(awayStarter.wins !== null && awayStarter.wins !== undefined) ? `${awayStarter.wins}승` : '-'} {(awayStarter.losses !== null && awayStarter.losses !== undefined) ? `${awayStarter.losses}패` : ''}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">시즌 ERA</span>
+                                          <strong className="text-rose-600 font-black">
+                                            {(awayStarter.era !== null && awayStarter.era !== undefined) ? (typeof awayStarter.era === 'number' ? awayStarter.era.toFixed(2) : awayStarter.era) : '-'}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">이닝 / 삼진</span>
+                                          <strong className="text-slate-800 font-bold">
+                                            {awayStarter.innings ? `${awayStarter.innings}이닝` : '-'} / {awayStarter.strikeouts ? `${awayStarter.strikeouts}K` : '-'}
+                                          </strong>
+                                        </div>
+                                        <div className="col-span-3 pt-1 border-t border-slate-50 text-[10px] text-left text-slate-400 font-sans flex items-center gap-1">
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                          <span>MyKBOStats 비공식 참고 데이터 (정상 반영됨)</span>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <p className="text-slate-400 text-center py-2 text-[11px]">해당 팀 선발 정보가 존재하지 않습니다.</p>
+                                    )}
+                                  </div>
+
+                                  {/* Right: Home Starter */}
+                                  <div className="bg-white p-3.5 rounded-lg border border-slate-150 space-y-2 shadow-sm">
+                                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                                      <span className={`text-[10px] text-white font-bold px-2 py-0.5 rounded-full ${getTeamColor(g.homeTeam)}`}>
+                                        {getTeamNameKo(g.homeTeam)} 선발
+                                      </span>
+                                      <span className="font-extrabold text-slate-800">{homeStarter?.name || '투수 정보 없음'}</span>
+                                    </div>
+
+                                    {homeStarter ? (
+                                      <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-medium text-slate-600 font-mono">
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">승-패</span>
+                                          <strong className="text-slate-800 font-extrabold">
+                                            {(homeStarter.wins !== null && homeStarter.wins !== undefined) ? `${homeStarter.wins}승` : '-'} {(homeStarter.losses !== null && homeStarter.losses !== undefined) ? `${homeStarter.losses}패` : ''}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">시즌 ERA</span>
+                                          <strong className="text-rose-600 font-black">
+                                            {(homeStarter.era !== null && homeStarter.era !== undefined) ? (typeof homeStarter.era === 'number' ? homeStarter.era.toFixed(2) : homeStarter.era) : '-'}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="block text-[10px] text-slate-400 font-bold mb-0.5">이닝 / 삼진</span>
+                                          <strong className="text-slate-800 font-bold">
+                                            {homeStarter.innings ? `${homeStarter.innings}이닝` : '-'} / {homeStarter.strikeouts ? `${homeStarter.strikeouts}K` : '-'}
+                                          </strong>
+                                        </div>
+                                        <div className="col-span-3 pt-1 border-t border-slate-50 text-[10px] text-left text-slate-400 font-sans flex items-center gap-1">
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                                          <span>MyKBOStats 비공식 참고 데이터 (정상 반영됨)</span>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <p className="text-slate-400 text-center py-2 text-[11px]">해당 팀 선발 정보가 존재하지 않습니다.</p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           {/* 2. Expected Lineup Comparison Grid */}
@@ -715,36 +889,68 @@ export function KboTodayGamesAndStandings() {
                           </div>
 
                           {/* 3. Prediction Factors Analysis */}
-                          {g.prediction && (
-                            <div className="bg-blue-50/60 rounded-xl p-4.5 border border-blue-100 space-y-2.5 shadow-inner">
-                              <div className="flex items-center justify-between">
-                                <h5 className="font-extrabold text-blue-900 flex items-center gap-1.5 text-xs">
-                                  <TrendingUp className="w-4 h-4" />
-                                  구장/매치업 가중치 정밀 분석 리포트 (Prediction Factors)
-                                </h5>
-                                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${
-                                  g.prediction.confidence === '높음' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
-                                  g.prediction.confidence === '보통' ? 'bg-blue-100 text-blue-800 border-blue-200' :
-                                  'bg-slate-100 text-slate-700 border-slate-200'
-                                }`}>
-                                  신뢰도: {g.prediction.confidence}
-                                </span>
+                          <div className="space-y-2">
+                            <h4 className="font-extrabold text-slate-800 flex items-center gap-1.5 pb-1 border-b border-dashed border-slate-200">
+                              <TrendingUp className="w-4 h-4 text-emerald-600" />
+                              시뮬레이션 승률 예측 분석 (Probability Prediction)
+                            </h4>
+
+                            {isPredictionsLoading ? (
+                              <div className="bg-slate-50 border border-slate-150 p-6 rounded-xl text-center text-slate-500 font-bold flex flex-col items-center justify-center gap-2 py-8 animate-pulse">
+                                <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
+                                <span className="text-xs">이 경기의 예상 승률 및 분석 요약 연산 중...</span>
                               </div>
+                            ) : predictionsError ? (
+                              <div className="bg-rose-50/50 border border-rose-100 p-6 rounded-xl text-center text-rose-600 font-bold flex flex-col items-center justify-center gap-1.5 py-6">
+                                <AlertCircle className="w-5 h-5 text-rose-400" />
+                                <span className="text-xs">승률예측 데이터를 생성하지 못했습니다.</span>
+                                <span className="text-[10px] text-rose-400 font-normal">{predictionsError}</span>
+                              </div>
+                            ) : pred ? (
+                              <div className="bg-blue-50/50 rounded-xl p-4 border border-blue-100 space-y-3 shadow-inner">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-blue-100/50">
+                                  <h5 className="font-extrabold text-blue-900 flex items-center gap-1.5 text-[11px]">
+                                    팀 전력 + 선발투수 지표 + 가중치 정밀 시뮬레이션 분석 리포트
+                                  </h5>
+                                  <span className={`inline-flex items-center text-[10px] font-black px-2 py-0.5 rounded border ${
+                                    pred.confidence === '높음' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                                    pred.confidence === '보통' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                                    pred.confidence === '낮음' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                                    'bg-slate-100 text-slate-700 border-slate-200'
+                                  }`}>
+                                    예측 신뢰도: {pred.confidence}
+                                  </span>
+                                </div>
 
-                              <p className="text-slate-700 leading-relaxed font-medium">
-                                {g.prediction.summary}
-                              </p>
+                                <p className="text-slate-700 leading-relaxed font-bold text-xs">
+                                  {pred.summary}
+                                </p>
 
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1.5 text-[11px] font-medium text-slate-600 font-sans">
-                                {g.prediction.factors.map((fac, idx) => (
-                                  <div key={idx} className="flex items-start gap-1.5 bg-white p-2 rounded border border-slate-150">
-                                    <span className="text-blue-600 mt-0.5 shrink-0 font-bold">•</span>
-                                    <span>{fac}</span>
+                                {pred.factors && pred.factors.length > 0 && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-bold text-slate-600 font-sans">
+                                    {pred.factors.map((fac, idx) => (
+                                      <div key={idx} className="flex items-start gap-1.5 bg-white p-2 rounded border border-slate-150">
+                                        <span className="text-blue-500 font-black">•</span>
+                                        <span>{fac}</span>
+                                      </div>
+                                    ))}
                                   </div>
-                                ))}
+                                )}
+                                
+                                {pred.missingData && pred.missingData.length > 0 && (
+                                  <div className="pt-1.5 border-t border-dashed border-blue-100/60 flex items-center gap-1 text-[9px] text-slate-400 font-semibold">
+                                    <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                                    <span>수집 부재 데이터: {pred.missingData.join(', ')} (모델 내에서 대체 지표로 보완 계산되었습니다.)</span>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          )}
+                            ) : (
+                              <div className="bg-slate-50 border border-slate-150 p-6 rounded-xl text-center text-slate-500 font-bold flex flex-col items-center justify-center gap-1.5 py-6">
+                                <AlertCircle className="w-5 h-5 text-slate-400" />
+                                <span className="text-xs">이 경기의 예측 데이터를 가져올 수 없습니다.</span>
+                              </div>
+                            )}
+                          </div>
 
                         </div>
                       )}
@@ -905,7 +1111,7 @@ export function KboTodayGamesAndStandings() {
                           const isValid = t.games === expectedSum;
                           return (
                             <div key={idx} className="flex items-center justify-between bg-slate-900 px-2.5 py-2 rounded border border-slate-800/50">
-                              <span className="font-extrabold text-slate-300">{t.teamName}</span>
+                              <span className="font-extrabold text-slate-300">{getTeamNameKo(t.teamName)}</span>
                               <span className={isValid ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
                                 {t.games}G ({isValid ? 'OK' : 'ERR'})
                               </span>
@@ -966,7 +1172,7 @@ export function KboTodayGamesAndStandings() {
                                 <span className={`w-5 h-5 rounded-full text-white font-black text-[10px] flex items-center justify-center shrink-0 ${getTeamColor(code)}`}>
                                   {CONFIG.TEAMS[code]?.logoChar || code[0]}
                                 </span>
-                                <span className="text-slate-900 font-extrabold">{team.teamName}</span>
+                                <span className="text-slate-900 font-extrabold">{getTeamNameKo(team.teamName)}</span>
                               </div>
                             </td>
 

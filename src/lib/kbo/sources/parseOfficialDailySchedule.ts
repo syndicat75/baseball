@@ -1,11 +1,31 @@
 /**
  * @file parseOfficialDailySchedule.ts
- * @description KBO 공식 영문 Daily Schedule 페이지에서 경기 일정을 가장 안정적으로 파싱하는 모듈입니다.
+ * @description KBO 공식 영문 Daily Schedule 페이지를 fetch 및 텍스트 기반 정규식으로 안전하게 파싱하는 모듈입니다.
  */
 
-import * as cheerio from 'cheerio';
-import { fetchHtml } from './fetchHtml';
-import { normaliseTeamName } from './parseOfficialStandings';
+const TEAM_CODES = [
+  "LG", "DOOSAN", "KIA", "SAMSUNG", "SSG",
+  "KT", "LOTTE", "HANWHA", "NC", "KIWOOM"
+];
+
+const TEAM_NAME_MAP: Record<string, string> = {
+  LG: "LG",
+  DOOSAN: "두산",
+  KIA: "KIA",
+  SAMSUNG: "삼성",
+  SSG: "SSG",
+  KT: "KT",
+  LOTTE: "롯데",
+  HANWHA: "한화",
+  NC: "NC",
+  KIWOOM: "키움"
+};
+
+const STADIUMS = [
+  "JAMSIL", "MUNHAK", "GWANGJU", "SUWON", "GOCHEOKSKY",
+  "DAEGU", "SAJIK", "DAEJEON", "CHANGWON", "POHANG",
+  "ULSAN", "CHEONGJU"
+];
 
 export interface DailyScheduleGame {
   gameId: string;
@@ -15,239 +35,149 @@ export interface DailyScheduleGame {
   homeTeam: string;
   awayScore: number | null;
   homeScore: number | null;
-  status: '예정' | '진행중' | '종료' | '우천취소' | '취소' | '지연';
+  status: string;
   stadium: string;
   source: string;
   sourceUrl: string;
 }
 
-const STADIUMS = [
-  'JAMSIL', 'MUNHAK', 'GWANGJU', 'SUWON', 'GOCHEOKSKY', 'GOCHEOK',
-  'DAEGU', 'SAJIK', 'DAEJEON', 'CHANGWON', 'POHANG', 'ULSAN', 'CHEONGJU'
-];
-
 /**
  * @function parseOfficialDailySchedule
- * @description KBO 공식 영문 Daily Schedule 페이지를 fetch하여 입력한 날짜(YYYY-MM-DD)의 경기를 수집합니다.
- * @param {string} dateStr - 조회할 날짜 (예: "2026-07-03")
- * @returns {Promise<{ games: DailyScheduleGame[]; sectionFound: boolean }>} 파싱 결과 (경기 목록 및 해당 날짜 섹션 매칭 여부)
+ * @description 기존 kboDataService와의 하위 호환성을 위한 래퍼 함수입니다.
  */
 export async function parseOfficialDailySchedule(dateStr: string): Promise<{ games: DailyScheduleGame[]; sectionFound: boolean }> {
-  console.log(`[parseOfficialDailySchedule] [CALL] dateStr: "${dateStr}"`);
-
-  // dateStr에서 년도와 월 추출
-  const parts = dateStr.split('-');
-  if (parts.length !== 3) {
-    throw new Error(`[parseOfficialDailySchedule] Invalid date format: ${dateStr}`);
+  console.log(`[parseOfficialDailySchedule] [WRAPPER] dateStr: "${dateStr}"`);
+  const url = "https://eng.koreabaseball.com/Schedule/DailySchedule.aspx";
+  const html = await fetchHtml(url, 4000);
+  if (!html.ok) {
+    throw new Error(`KBO 공식 일정 페이지 요청 실패: ${html.status}`);
   }
-  const year = parts[0];
-  const month = parts[1]; // '07'
-  const day = parts[2]; // '03'
+  const parsed = parseOfficialDailyScheduleText(html.text, dateStr);
+  return {
+    games: parsed.games as DailyScheduleGame[],
+    sectionFound: parsed.emptyReason !== "NO_SCHEDULED_GAMES" || parsed.games.length > 0
+  };
+}
 
-  // KBO 공식 영문 스케줄 페이지는 searchMonth 매개변수로 월별 조회가 가능합니다.
-  const url = `https://eng.koreabaseball.com/Schedule/DailySchedule.aspx?searchMonth=${month}`;
-  console.log(`[parseOfficialDailySchedule] Fetching URL: "${url}"`);
+/**
+ * @function fetchHtml
+ * @description 외부 URL에서 HTML을 가져오는 비동기 함수입니다. 타임아웃과 표준 User-Agent 헤더를 설정합니다.
+ */
+export async function fetchHtml(url: string, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  const response = await fetchHtml(url);
-  if (!response.ok) {
-    throw new Error(`KBO 공식 영문 Daily Schedule 페이지 연동 실패. HTTP Status: ${response.status}`);
-  }
-
-  const $ = cheerio.load(response.text);
-  const games: DailyScheduleGame[] = [];
-  let sectionFound = false;
-
-  // target date format in DailySchedule.aspx text: "07.03" or "7.3" or "07.03(FRI)"
-  const targetMmDd = `${month}.${day}`; // "07.03"
-  const targetMmDdAlt = `${parseInt(month, 10)}.${parseInt(day, 10)}`; // "7.3"
-
-  console.log(`[parseOfficialDailySchedule] Target search tags: "${targetMmDd}", "${targetMmDdAlt}"`);
-
-  // 1. Cheerio Table-based HTML 파서 시도
   try {
-    let currentHtmlDate = '';
-    
-    $('table tbody tr').each((_, tr) => {
-      const $tr = $(tr);
-      const tds = $tr.find('td');
-      if (tds.length === 0) return;
-
-      // 만약 첫 번째 셀에 날짜 텍스트가 존재하면 날짜 업데이트
-      const firstCellText = $(tds[0]).text().trim();
-      const dateMatch = firstCellText.match(/(\d{1,2})\.(\d{1,2})/);
-      
-      if (dateMatch) {
-        const m = dateMatch[1].padStart(2, '0');
-        const d = dateMatch[2].padStart(2, '0');
-        currentHtmlDate = `${year}-${m}-${d}`;
-        if (currentHtmlDate === dateStr) {
-          sectionFound = true;
-        }
-      }
-
-      // 현재 행의 날짜가 우리가 찾는 날짜인지 확인
-      if (currentHtmlDate === dateStr) {
-        sectionFound = true;
-        // 테이블 우측 정렬 기준 인덱싱을 통해 rowspan 구조에 완벽 대응
-        // 7개 셀: Date, Play, Time, Game, TV, Stadium, Note
-        // 5개 셀: Time, Game, TV, Stadium, Note (rowspan 적용 시)
-        const note = $(tds[tds.length - 1]).text().trim();
-        const stadiumRaw = $(tds[tds.length - 2]).text().trim().toUpperCase();
-        const tv = $(tds[tds.length - 3]).text().trim();
-        const gameRaw = $(tds[tds.length - 4]).text().trim();
-        const time = $(tds[tds.length - 5]).text().trim();
-
-        if (gameRaw && time) {
-          // Game 문자열 파싱 (예: "LOTTE 5:2 DOOSAN" 또는 "HANWHA : LG")
-          const gameMatch = gameRaw.match(/([A-Za-z\s]+)\s*(\d*)\s*:\s*(\d*)\s*([A-Za-z\s]+)/);
-          if (gameMatch) {
-            const rawAway = gameMatch[1].trim();
-            const rawAwayScore = gameMatch[2].trim();
-            const rawHomeScore = gameMatch[3].trim();
-            const rawHome = gameMatch[4].trim();
-
-            const awayTeam = normaliseTeamName(rawAway);
-            const homeTeam = normaliseTeamName(rawHome);
-
-            if (awayTeam && homeTeam && awayTeam !== homeTeam) {
-              const awayScore = rawAwayScore ? parseInt(rawAwayScore, 10) : null;
-              const homeScore = rawHomeScore ? parseInt(rawHomeScore, 10) : null;
-
-              let status: DailyScheduleGame['status'] = '예정';
-              if (rawAwayScore !== '' && rawHomeScore !== '') {
-                status = '종료';
-              }
-              if (note.toLowerCase().includes('cancel') || note.toLowerCase().includes('postponed') || note.includes('우천취소')) {
-                status = '우천취소';
-              } else if (note.toLowerCase().includes('live') || note.toLowerCase().includes('playing')) {
-                status = '진행중';
-              }
-
-              let stadium = stadiumRaw;
-              const matchedStadium = STADIUMS.find(s => stadiumRaw.includes(s));
-              if (matchedStadium) {
-                stadium = matchedStadium;
-              }
-
-              const gameId = `${year}${month}${day}_${awayTeam}_${homeTeam}`;
-              
-              if (!games.some(g => g.gameId === gameId)) {
-                games.push({
-                  gameId,
-                  date: dateStr,
-                  time,
-                  awayTeam,
-                  homeTeam,
-                  awayScore,
-                  homeScore,
-                  status,
-                  stadium,
-                  source: 'KBO_OFFICIAL_DAILY_SCHEDULE_HTML',
-                  sourceUrl: url
-                });
-              }
-            }
-          }
-        }
-      }
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 KBO-Viewer/1.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+      },
+      cache: "no-store"
     });
 
-    if (games.length > 0) {
-      console.log(`[parseOfficialDailySchedule] Successfully parsed ${games.length} games using HTML table parser.`);
-      return { games, sectionFound };
-    }
-  } catch (htmlErr: any) {
-    console.warn(`[parseOfficialDailySchedule] HTML table parser warning:`, htmlErr);
+    const text = await response.text();
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+      text,
+      rawPreview: text.slice(0, 500),
+      url
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * @function parseOfficialDailyScheduleText
+ * @description KBO 공식 영문 Daily Schedule HTML 텍스트를 파싱하여 지정한 날짜의 경기 리스트를 추출합니다.
+ */
+export function parseOfficialDailyScheduleText(htmlText: string, dateStr: string) {
+  const [, month, day] = dateStr.split("-");
+  const mmdd = `${month}.${day}`;
+
+  const bodyText = htmlText
+    .replace(/\r/g, "")
+    .replace(/\n+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const dateHeaderRegex = new RegExp(`${mmdd}\\([A-Z]{3}\\)\\s+REGULAR\\s+`, "i");
+  const startMatch = dateHeaderRegex.exec(bodyText);
+
+  if (!startMatch || startMatch.index === undefined) {
+    return {
+      success: true,
+      games: [],
+      emptyReason: "NO_SCHEDULED_GAMES",
+      parserNote: "선택 날짜 섹션을 찾지 못했습니다."
+    };
   }
 
-  // 2. Cheerio 기반 파서 실패 혹은 누락 시 정밀 텍스트 기반 정규식 파서 기동 (Supplementary / Fallback)
-  console.log(`[parseOfficialDailySchedule] HTML table yielded 0 games. Running regex-based text block parser.`);
-  const bodyText = $('body').text();
-  const compact = bodyText.replace(/\s+/g, ' ').trim();
+  const sectionStart = startMatch.index + startMatch[0].length;
+  const rest = bodyText.slice(sectionStart);
 
-  // 날짜 헤더 인덱스 찾기
-  // 예: "07.03(FRI)" 혹은 "7.3(FRI)"
-  const dateRegex = new RegExp(`(${month}\\.${day}|${parseInt(month, 10)}\\.${parseInt(day, 10)})\\s*\\([A-Z]{3,4}\\)`, 'i');
-  const dateMatch = compact.match(dateRegex);
+  const nextDateMatch = /\d{2}\.\d{2}\([A-Z]{3}\)\s+/.exec(rest);
+  const sectionText =
+    nextDateMatch && nextDateMatch.index > 0
+      ? rest.slice(0, nextDateMatch.index)
+      : rest;
 
-  if (!dateMatch) {
-    console.log(`[parseOfficialDailySchedule] No date header matched for target: "${targetMmDd}" or "${targetMmDdAlt}"`);
-    return { games: [], sectionFound: false };
-  }
+  const teamPattern = TEAM_CODES.join("|");
+  const stadiumPattern = STADIUMS.join("|");
 
-  sectionFound = true;
-  const startIndex = dateMatch.index || 0;
-  // 다음 날짜 헤더 시작점을 찾아 그 사이 텍스트만 추출
-  const nextDateRegex = /\b(\d{1,2}\.\d{1,2})\s*\([A-Z]{3,4}\)/gi;
-  nextDateRegex.lastIndex = startIndex + dateMatch[0].length;
-  
-  const nextMatch = nextDateRegex.exec(compact);
-  const endIndex = nextMatch ? nextMatch.index : compact.length;
+  const gameRegex = new RegExp(
+    `(\\d{1,2}:\\d{2})\\s+(${teamPattern})\\s+(:|\\d+:\\d+)\\s+(${teamPattern})(?:\\s+[A-Z0-9\\-]+)*\\s+(${stadiumPattern})`,
+    "g"
+  );
 
-  const targetDateBlock = compact.substring(startIndex, endIndex);
-  console.log(`[parseOfficialDailySchedule] Extracted target date text block: "${targetDateBlock}"`);
-
-  // 경기 정보 파싱 정규식
-  // 18:30 HANWHA : LG K-2T JAMSIL - 또는 18:30 LOTTE 5:2 DOOSAN KN-T JAMSIL -
-  const gamePattern = /(\d{1,2}:\d{2})\s+([A-Za-z]+)\s+(\d*)\s*:\s*(\d*)\s+([A-Za-z]+)/g;
+  const games = [];
   let match;
-  
-  while ((match = gamePattern.exec(targetDateBlock)) !== null) {
+
+  while ((match = gameRegex.exec(sectionText)) !== null) {
     const time = match[1];
-    const rawAway = match[2];
-    const rawAwayScore = match[3];
-    const rawHomeScore = match[4];
-    const rawHome = match[5];
+    const awayRaw = match[2];
+    const scoreOrColon = match[3];
+    const homeRaw = match[4];
+    const stadium = match[5];
 
-    const awayTeam = normaliseTeamName(rawAway);
-    const homeTeam = normaliseTeamName(rawHome);
+    const scoreMatch = scoreOrColon.match(/^(\d+):(\d+)$/);
+    const isScheduled = scoreOrColon === ":";
 
-    if (awayTeam && homeTeam && awayTeam !== homeTeam) {
-      const awayScore = rawAwayScore ? parseInt(rawAwayScore, 10) : null;
-      const homeScore = rawHomeScore ? parseInt(rawHomeScore, 10) : null;
-
-      let status: DailyScheduleGame['status'] = '예정';
-      if (rawAwayScore !== '' && rawHomeScore !== '') {
-        status = '종료';
-      }
-
-      // 구장 정보 찾기
-      const lookAheadText = targetDateBlock.substring(gamePattern.lastIndex, gamePattern.lastIndex + 100).toUpperCase();
-      let stadium = '구장';
-      for (const s of STADIUMS) {
-        if (lookAheadText.includes(s)) {
-          stadium = s;
-          break;
-        }
-      }
-
-      // 상태 보강 (우천취소 등)
-      if (lookAheadText.includes('CANCEL') || lookAheadText.includes('POSTPONED') || lookAheadText.includes('RAIN')) {
-        status = '우천취소';
-      } else if (lookAheadText.includes('LIVE') || lookAheadText.includes('PLAYING')) {
-        status = '진행중';
-      }
-
-      const gameId = `${year}${month}${day}_${awayTeam}_${homeTeam}`;
-      if (!games.some(g => g.gameId === gameId)) {
-        console.log(`[parseOfficialDailySchedule] Regex text matched game: ${awayTeam} vs ${homeTeam} at ${stadium} (${time})`);
-        games.push({
-          gameId,
-          date: dateStr,
-          time,
-          awayTeam,
-          homeTeam,
-          awayScore,
-          homeScore,
-          status,
-          stadium,
-          source: 'KBO_OFFICIAL_DAILY_SCHEDULE_TEXT',
-          sourceUrl: url
-        });
-      }
-    }
+    games.push({
+      gameId: `${dateStr.replaceAll("-", "")}_${awayRaw}_${homeRaw}`,
+      date: dateStr,
+      time,
+      awayTeam: TEAM_NAME_MAP[awayRaw] || awayRaw,
+      homeTeam: TEAM_NAME_MAP[homeRaw] || homeRaw,
+      awayScore: scoreMatch ? Number(scoreMatch[1]) : null,
+      homeScore: scoreMatch ? Number(scoreMatch[2]) : null,
+      status: isScheduled ? "scheduled" : "final",
+      stadium,
+      source: "KBO_OFFICIAL_DAILY_SCHEDULE",
+      sourceUrl: "https://eng.koreabaseball.com/Schedule/DailySchedule.aspx"
+    });
   }
 
-  console.log(`[parseOfficialDailySchedule] [SUCCESS] Scraped ${games.length} games for date: "${dateStr}"`);
-  return { games, sectionFound };
+  if (games.length === 0) {
+    return {
+      success: false,
+      games: [],
+      emptyReason: "FETCH_OR_PARSE_FAILED",
+      error: "DAILY_SCHEDULE_PARSE_FAILED",
+      parserNote: "선택 날짜 섹션은 찾았으나 경기 라인을 파싱하지 못했습니다.",
+      sectionPreview: sectionText.slice(0, 1000)
+    };
+  }
+
+  return {
+    success: true,
+    games,
+    emptyReason: null
+  };
 }

@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       success: true,
       date: targetDate,
       kboDate: kboDateStr,
-      source: standingsResult.source,
+      source: "KBO_OFFICIAL_EN_STANDINGS",
       sourceLabel: standingsResult.sourceLabel,
       asOfDate: standingsResult.asOfDate,
       updatedAt: standingsResult.updatedAt,

@@ -15,6 +15,7 @@ import { createServer as createViteServer } from 'vite';
 import healthHandler from './api/health';
 import standingsHandler from './api/kbo/standings';
 import todayGamesHandler from './api/kbo/today-games';
+import gameDetailsHandler from './api/kbo/game-details';
 import gamePredictionsHandler from './api/kbo/game-predictions';
 import predictionsHandler from './api/kbo/predictions';
 import refreshHandler from './api/kbo/refresh';
@@ -80,6 +81,7 @@ async function startServer() {
   app.get('/api/health', adaptHandler(healthHandler));
   app.get('/api/kbo/standings', adaptHandler(standingsHandler));
   app.get('/api/kbo/today-games', adaptHandler(todayGamesHandler));
+  app.get('/api/kbo/game-details', adaptHandler(gameDetailsHandler));
   app.get('/api/kbo/game-predictions', adaptHandler(gamePredictionsHandler));
   app.get('/api/kbo/predictions', adaptHandler(predictionsHandler));
   app.post('/api/kbo/refresh', adaptHandler(refreshHandler));

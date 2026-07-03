@@ -1,11 +1,11 @@
 /**
- * @file predictions.ts
- * @description KBO 리그 당일 경기별 규칙 기반(Rule-based-v1) 승률예측 데이터를 비동기 제공하는 Vercel Serverless API 엔드포인트입니다.
+ * @file game-details.ts
+ * @description KBO 리그 당일 경기 선발투수 세부 정보를 비동기식으로 안전하게 제공하는 Vercel Serverless API 엔드포인트입니다.
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getKoreaTodayString, isValidDateString } from '../../src/lib/kbo/dateUtils';
-import { getPredictionsData } from '../../src/lib/kbo/predictionService';
+import { getGameDetailsData } from '../../src/lib/kbo/gameDetailsService';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -20,27 +20,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({
         success: false,
         date,
-        predictions: [],
+        details: [],
         error: "INVALID_DATE",
         message: "날짜 형식은 YYYY-MM-DD여야 합니다.",
         updatedAt: new Date().toISOString()
       });
     }
 
-    const result = await getPredictionsData(date, forceRefresh);
+    const result = await getGameDetailsData(date, forceRefresh);
 
     if (!result.success) {
       return res.status(200).json({
         success: false,
         date: result.date || date,
-        predictions: [],
-        error: result.error || "PREDICTION_FAILED",
-        message: result.message || "승률예측 데이터를 생성하지 못했습니다.",
+        details: [],
+        error: result.error || "GAME_DETAILS_FETCH_FAILED",
+        message: result.message || "선발투수 정보를 수집하지 못했습니다.",
         updatedAt: result.updatedAt || new Date().toISOString()
       });
     }
 
-    // Vercel 브라우저/CDN 엣지 캐시 설정 (5분 캐시, stale-while-revalidate 2분)
+    // s-maxage 부여 (5분)
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=120');
 
     return res.status(200).json(result);
@@ -48,8 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       success: false,
       date: typeof req.query.date === "string" ? req.query.date : getKoreaTodayString(),
-      predictions: [],
-      error: "PREDICTION_FAILED",
+      details: [],
+      error: "GAME_DETAILS_FETCH_FAILED",
       message: error instanceof Error ? error.message : String(error),
       updatedAt: new Date().toISOString()
     });
