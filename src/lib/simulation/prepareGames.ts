@@ -149,6 +149,7 @@ export function prepareGames(
       stadium: 'SYNTHETIC_STADIUM',
       status: 'scheduled',
       synthetic: true,
+      clearly_synthetic: true,
       reason: 'fill-to-144'
     });
 

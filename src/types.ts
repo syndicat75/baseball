@@ -93,6 +93,7 @@ export interface KBOGame {
   stadium: string;
   status: 'completed' | 'scheduled' | 'postponed';
   synthetic?: boolean;    // If generated for unresolved postponed games
+  clearly_synthetic?: boolean; // Flag to explicitly isolate synthetic games from real ones in UI/API
   reason?: string;
 }
 

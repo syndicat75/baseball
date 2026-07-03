@@ -10,30 +10,31 @@ import { getKoreaTodayString, isValidDateString, toKboDate } from '../../src/lib
 import { PitcherStats } from '../../src/types';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { date, refresh } = req.query;
-  console.log(`[api/kbo/predictions] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
-
-  const todayStr = getKoreaTodayString();
-  const targetDate = (date as string) || todayStr;
-  const kboDateStr = toKboDate(targetDate);
-  const forceRefresh = refresh === 'true';
-
-  // 1. 날짜형식 엄격성 검증
-  if (!isValidDateString(targetDate)) {
-    console.error(`[api/kbo/predictions] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    return res.status(200).json({
-      success: false,
-      date: targetDate,
-      kboDate: kboDateStr,
-      predictions: [],
-      error: 'INVALID_DATE_FORMAT',
-      message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
-      source: 'NONE',
-      updatedAt: new Date().toISOString()
-    });
-  }
-
   try {
+    const { date, refresh } = req.query;
+    console.log(`[api/kbo/predictions] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
+
+    const todayStr = getKoreaTodayString();
+    const targetDate = (date as string) || todayStr;
+
+    // 1. 날짜형식 엄격성 검증
+    if (!isValidDateString(targetDate)) {
+      console.error(`[api/kbo/predictions] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
+      return res.status(200).json({
+        success: false,
+        date: targetDate,
+        kboDate: targetDate.replaceAll('-', ''),
+        predictions: [],
+        error: 'INVALID_DATE_FORMAT',
+        message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+        source: 'NONE',
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const kboDateStr = toKboDate(targetDate);
+    const forceRefresh = refresh === 'true';
+
     // A. 실시간 순위 정보 획득
     const standingsRes = await getStandingsData(false);
     const standingsList = standingsRes.success ? standingsRes.standings : [];
@@ -126,13 +127,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (err: any) {
     console.error('[api/kbo/predictions] [CRITICAL] Unhandled Server Exception', err);
-    return res.status(500).json({
+    return res.status(200).json({
       success: false,
       error: 'SERVER_EXCEPTION',
       message: '예측 데이터를 산출하는 과정에서 치명적인 서버 내부 예외가 발생했습니다.',
       details: err.message || String(err),
       source: 'NONE',
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      predictions: []
     });
   }
 }

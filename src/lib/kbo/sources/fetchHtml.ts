@@ -13,15 +13,15 @@
 export async function fetchHtml(url: string, options?: RequestInit) {
   console.log(`[fetchHtml] [CALL] url: "${url}"`);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
+  const timeout = setTimeout(() => controller.abort(), 4000);
 
   try {
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 KBO-Viewer/1.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         ...(options?.headers || {}),
       },

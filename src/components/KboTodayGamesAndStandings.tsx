@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import { CONFIG } from '../config';
 import { TeamStanding, TodayGame } from '../types';
+import { safeFetchJson } from '../lib/http/safeFetchJson';
 import { getKoreaTodayString, isValidDateString } from '../lib/kbo/dateUtils';
 import { 
   Calendar, 
@@ -84,13 +85,12 @@ export function KboTodayGamesAndStandings() {
     setIsStandingsLoading(true);
     setStandingsError(null);
     try {
-      const res = await fetch(`/api/kbo/standings?date=${dateStr}`);
-      const data = await res.json();
-      
-      if (!res.ok || data.success === false) {
-        throw new Error(data.error || `서버 응답 오류 (상태: ${res.status})`);
+      const result = await safeFetchJson<any>(`/api/kbo/standings?date=${dateStr}`);
+      if (!result.ok || !result.data) {
+        throw new Error(result.message || '수집 실패');
       }
       
+      const data = result.data;
       if (data && data.standings) {
         setStandings(data.standings);
         setStandingsMeta({
@@ -121,13 +121,12 @@ export function KboTodayGamesAndStandings() {
     setIsGamesLoading(true);
     setGamesError(null);
     try {
-      const res = await fetch(`/api/kbo/today-games?date=${dateStr}`);
-      const data = await res.json();
-      
-      if (!res.ok || data.success === false) {
-        throw new Error(data.error || `서버 응답 오류 (상태: ${res.status})`);
+      const result = await safeFetchJson<any>(`/api/kbo/today-games?date=${dateStr}`);
+      if (!result.ok || !result.data) {
+        throw new Error(result.message || '수집 실패');
       }
-
+      
+      const data = result.data;
       if (data && data.games) {
         // 클라이언트 사이드 중복 방지 및 자가 매치업 방지 디펜시브 코드 적용
         const seenGameIds = new Set<string>();
@@ -185,21 +184,21 @@ export function KboTodayGamesAndStandings() {
     setRefreshMessage(null);
 
     try {
-      const res = await fetch(`/api/kbo/refresh?date=${targetDate}`);
-      const data = await res.json();
+      const result = await safeFetchJson<any>(`/api/kbo/refresh?date=${targetDate}`);
       
-      if (res.status === 429) {
-        // Rate limit hit
+      if (result.status === 429) {
+        const data = result.data || {};
         console.warn(`[KboTodayGamesAndStandings] Rate limit hit. Cooldown remaining: ${data.cooldownSeconds}s`);
         setCooldownRemaining(data.cooldownSeconds || 300);
         setErrorMsg(`수동 새로고침 요청이 제한되었습니다. ${data.cooldownSeconds}초만 기다려주세요.`);
         return;
       }
 
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || '수동 갱신 실행 중 오류 발생');
+      if (!result.ok || !result.data) {
+        throw new Error(result.message || '수동 갱신 실행 중 오류 발생');
       }
 
+      const data = result.data;
       console.log('[KboTodayGamesAndStandings] Server re-crawled successfully.');
       setRefreshMessage(`KBO 공식 실시간 데이터 수집 성공! (갱신 소요: ${data.durationMs}ms)`);
       

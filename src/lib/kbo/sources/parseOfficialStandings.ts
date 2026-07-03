@@ -181,6 +181,56 @@ export async function parseOfficialStandings(): Promise<OfficialTeamStanding[]> 
     }
   });
   
+  // Text-based fallback parser if some teams are missing or tables failed to parse
+  if (Object.keys(basicDataMap).length < 10) {
+    console.log('[parseOfficialStandings] Cheerio table parsing was incomplete or failed. Attempting text-based fallback parser.');
+    const lines = result.text.split('\n');
+    const teamRegex = /(LG\s*Twins|LG|Doosan\s*Bears|Doosan|Kia\s*Tigers|KIA\s*Tigers|KIA|Samsung\s*Lions|Samsung|SSG\s*Landers|SSG|KT\s*Wiz|KT|Lotte\s*Giants|Lotte|Hanwha\s*Eagles|Hanwha|NC\s*Dinos|NC|Kiwoom\s*Heroes|Kiwoom)/gi;
+    
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+      
+      const matchedTeams = cleanLine.match(teamRegex);
+      if (matchedTeams && matchedTeams.length > 0) {
+        const numbers = cleanLine.match(/\b\d+(\.\d+)?\b/g);
+        if (numbers && numbers.length >= 4) {
+          // Let's look for any 3 or 4 numbers sequence where games = wins + losses + draws
+          for (let i = 0; i <= numbers.length - 3; i++) {
+            const possibleGames = parseInt(numbers[i], 10);
+            const possibleWins = parseInt(numbers[i+1], 10);
+            const possibleLosses = parseInt(numbers[i+2], 10);
+            const possibleDraws = i + 3 < numbers.length ? parseInt(numbers[i+3], 10) : 0;
+            
+            if (possibleGames > 0 && possibleGames === possibleWins + possibleLosses + possibleDraws) {
+              const rawTeam = matchedTeams[0];
+              const normalized = normaliseTeamName(rawTeam);
+              if (normalized && !basicDataMap[normalized]) {
+                const pctCandidate = i + 4 < numbers.length ? parseFloat(numbers[i+4]) : (possibleWins / possibleGames);
+                const rankCandidate = i > 0 ? parseInt(numbers[i-1], 10) : 99;
+                console.log(`[parseOfficialStandings] Text-based fallback matched: Team: ${normalized}, Rank: ${rankCandidate}, G: ${possibleGames}, W: ${possibleWins}, L: ${possibleLosses}, D: ${possibleDraws}, PCT: ${pctCandidate}`);
+                basicDataMap[normalized] = {
+                  rank: rankCandidate,
+                  teamName: normalized,
+                  games: possibleGames,
+                  wins: possibleWins,
+                  losses: possibleLosses,
+                  draws: possibleDraws,
+                  winningPct: isNaN(pctCandidate) ? 0 : pctCandidate,
+                  gamesBehind: '0',
+                  streak: '-',
+                  home: '-',
+                  away: '-'
+                };
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  
   // 3. 병합 결과 구조물 생성 및 엄격한 무결성 검증
   const standingsList: OfficialTeamStanding[] = [];
   const nowStr = new Date().toISOString();

@@ -6,6 +6,7 @@
  */
 
 import { fallbackKboData } from '../../data/fallbackKboData';
+import { safeFetchJson } from '../http/safeFetchJson';
 
 export interface LoadKboStaticDataResult {
   data: any;
@@ -36,9 +37,9 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
     try {
       const dateUrl = `/data/kbo-${targetDate}.json?ts=${ts}`;
       console.log(`[loadKboStaticData] Trying date-specific JSON: ${dateUrl}`);
-      const dateResponse = await fetch(dateUrl);
-      if (dateResponse.ok) {
-        const data = await dateResponse.json();
+      const result = await safeFetchJson(dateUrl);
+      if (result.ok && result.data) {
+        const data = result.data;
         console.log(`[loadKboStaticData] Successfully loaded date-specific JSON: ${dateUrl}`);
         return {
           data,
@@ -53,7 +54,7 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
           fetchedAt: data.fetchedAt || null,
         };
       } else {
-        console.log(`[loadKboStaticData] Date-specific JSON not found or returned error (${dateResponse.status}). Falling back to latest JSON.`);
+        console.log(`[loadKboStaticData] Date-specific JSON not found or returned error: ${result.message}. Falling back to latest JSON.`);
       }
     } catch (err) {
       console.warn('[loadKboStaticData] Error fetching date-specific JSON, trying latest.', err);
@@ -62,16 +63,26 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
 
   // 2. 최신 수집 데이터 fetch 시도
   try {
-    const latestUrl = `/data/kbo-latest.json?ts=${ts}`;
-    console.log(`[loadKboStaticData] Fetching latest static JSON: ${latestUrl}`);
+    const latestUrl = `/api/kbo/snapshot?ts=${ts}`;
+    console.log(`[loadKboStaticData] Fetching latest static snapshot via API: ${latestUrl}`);
     
-    const response = await fetch(latestUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    const result = await safeFetchJson(latestUrl);
+    if (!result.ok || !result.data) {
+      throw new Error(result.message || 'snapshot API fetch failed');
     }
     
-    const data = await response.json();
-    console.log('[loadKboStaticData] Successfully loaded latest static JSON data.', {
+    const apiData = result.data;
+    const data = {
+      asOfDate: apiData.asOfDate,
+      fetchedAt: apiData.updatedAt,
+      primarySource: apiData.source,
+      sourceLabel: apiData.sourceLabel,
+      standings: apiData.standings,
+      remainingGames: apiData.remainingGames,
+      completedGames: apiData.completedGames || []
+    };
+    
+    console.log('[loadKboStaticData] Successfully loaded latest static snapshot data via API.', {
       asOfDate: data.asOfDate,
       sourceLabel: data.sourceLabel,
       fetchedAt: data.fetchedAt,
@@ -81,12 +92,12 @@ export async function loadKboStaticData(targetDate?: string): Promise<LoadKboSta
       data,
       source: 'static-json',
       sourceLabel: data.sourceLabel || '예약 수집 JSON 데이터',
-      standingsSource: data.standingsSource || data.primarySource || 'static-json',
-      standingsSourceLabel: data.standingsSourceLabel || data.sourceLabel || '예약 수집 순위 데이터',
-      scheduleSource: data.scheduleSource || 'generated-from-standings',
-      scheduleSourceLabel: data.scheduleSourceLabel || '순위표 기준 144경기 보정 일정',
+      standingsSource: apiData.source || 'static-json',
+      standingsSourceLabel: apiData.sourceLabel || '예약 수집 순위 데이터',
+      scheduleSource: 'generated-from-standings',
+      scheduleSourceLabel: '순위표 기준 144경기 보정 일정',
       isFallback: false,
-      warnings: data.warnings || [],
+      warnings: apiData.warnings || [],
       fetchedAt: data.fetchedAt || null,
     };
   } catch (error: any) {

@@ -108,6 +108,7 @@ export function generateRemainingGamesFromStandings(standings: StandingsTeam[], 
       stadium: (CONFIG.TEAMS[teamB as keyof typeof CONFIG.TEAMS] as any)?.stadium || 'NEUTRAL',
       status: 'scheduled',
       synthetic: true, // 보정 경기임을 표시
+      clearly_synthetic: true, // Mark clearly for the client UI/API layer
       reason: 'Generated from Standings to ensure 144 games',
     });
   }

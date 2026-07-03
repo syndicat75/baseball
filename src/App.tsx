@@ -558,6 +558,19 @@ export default function App() {
           </div>
         )}
 
+        {/* Stale Static Snapshot Warning Banner */}
+        {simData && (
+          <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 rounded-xl p-4 shadow-sm text-xs md:text-sm font-semibold flex items-start gap-3 animate-fade-in">
+            <span className="text-xl mt-0.5">⚠️</span>
+            <div className="space-y-1">
+              <p className="font-extrabold text-amber-950">정적 백업 스냅샷 분석 안내</p>
+              <p className="text-xs text-amber-900 leading-relaxed font-medium">
+                이 시뮬레이션 확률은 실시간 데이터가 아닌 예약 수집된 백업 스냅샷({simData.date || '2026-07-03'} 기준)을 이용해 계산되었습니다. 최신 실제 상황과 차이가 있을 수 있습니다.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Real-time Standings and Today's Games Predictions Widget */}
         <KboTodayGamesAndStandings />
         

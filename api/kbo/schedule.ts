@@ -8,14 +8,14 @@ import { getTodayGamesData } from '../../src/lib/kbo/kboDataService';
 import { getKoreaTodayString } from '../../src/lib/kbo/dateUtils';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { from, refresh } = req.query;
-  console.log(`[api/kbo/schedule] [CALL] handler - from param: "${from}", refresh: "${refresh}"`);
-
-  const todayStr = getKoreaTodayString();
-  const targetDate = (from as string) || todayStr;
-  const forceRefresh = refresh === 'true';
-
   try {
+    const { from, refresh } = req.query;
+    console.log(`[api/kbo/schedule] [CALL] handler - from param: "${from}", refresh: "${refresh}"`);
+
+    const todayStr = getKoreaTodayString();
+    const targetDate = (from as string) || todayStr;
+    const forceRefresh = refresh === 'true';
+
     const gamesResult = await getTodayGamesData(targetDate, forceRefresh);
 
     if (!gamesResult.success) {
@@ -61,13 +61,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(response);
   } catch (err: any) {
     console.error('[api/kbo/schedule] [CRITICAL] Unhandled Server Exception', err);
-    return res.status(500).json({
+    return res.status(200).json({
       success: false,
       error: 'SERVER_EXCEPTION',
       message: '일정을 조회하는 과정에서 치명적인 서버 내부 예외가 발생했습니다.',
       details: err.message || String(err),
       source: 'NONE',
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      completedGames: [],
+      remainingGames: [],
+      unresolvedGames: [],
+      games: []
     });
   }
 }

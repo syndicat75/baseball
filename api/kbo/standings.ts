@@ -8,28 +8,29 @@ import { getStandingsData } from '../../src/lib/kbo/kboDataService';
 import { getKoreaTodayString, isValidDateString, toKboDate } from '../../src/lib/kbo/dateUtils';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { date, refresh } = req.query;
-  console.log(`[api/kbo/standings] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
-
-  const todayStr = getKoreaTodayString();
-  const targetDate = (date as string) || todayStr;
-  const kboDateStr = toKboDate(targetDate);
-  const forceRefresh = refresh === 'true';
-
-  // 1. 날짜 형식 엄격성 검증
-  if (!isValidDateString(targetDate)) {
-    console.error(`[api/kbo/standings] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    return res.status(200).json({
-      success: false,
-      error: 'INVALID_DATE_FORMAT',
-      message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
-      details: `Requested date: "${targetDate}"`,
-      source: 'NONE',
-      updatedAt: new Date().toISOString()
-    });
-  }
-
   try {
+    const { date, refresh } = req.query;
+    console.log(`[api/kbo/standings] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
+
+    const todayStr = getKoreaTodayString();
+    const targetDate = (date as string) || todayStr;
+
+    // 1. 날짜 형식 엄격성 검증
+    if (!isValidDateString(targetDate)) {
+      console.error(`[api/kbo/standings] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
+      return res.status(200).json({
+        success: false,
+        error: 'INVALID_DATE_FORMAT',
+        message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+        details: `Requested date: "${targetDate}"`,
+        source: 'NONE',
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const kboDateStr = toKboDate(targetDate);
+    const forceRefresh = refresh === 'true';
+
     // getStandingsData를 통해 수집 및 캐싱된 데이터 획득
     const standingsResult = await getStandingsData(forceRefresh);
 
@@ -66,7 +67,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (err: any) {
     console.error('[api/kbo/standings] [CRITICAL] Unhandled Server Exception', err);
-    return res.status(500).json({
+    return res.status(200).json({
       success: false,
       error: 'SERVER_EXCEPTION',
       message: '순위표 조회 과정에서 치명적인 서버 내부 예외가 발생했습니다.',

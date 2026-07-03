@@ -10,30 +10,31 @@ import { getKoreaTodayString, isValidDateString, toKboDate } from '../../src/lib
 import { PitcherStats } from '../../src/types';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { date, refresh } = req.query;
-  console.log(`[api/kbo/today-games] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
-
-  const todayStr = getKoreaTodayString();
-  const targetDate = (date as string) || todayStr;
-  const kboDateStr = toKboDate(targetDate);
-  const forceRefresh = refresh === 'true';
-
-  // 1. 날짜형식 엄격성 검증
-  if (!isValidDateString(targetDate)) {
-    console.error(`[api/kbo/today-games] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    return res.status(200).json({
-      success: false,
-      date: targetDate,
-      kboDate: kboDateStr,
-      games: [],
-      emptyReason: 'FETCH_OR_PARSE_FAILED',
-      error: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
-      source: 'NONE',
-      updatedAt: new Date().toISOString()
-    });
-  }
-
   try {
+    const { date, refresh } = req.query;
+    console.log(`[api/kbo/today-games] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
+
+    const todayStr = getKoreaTodayString();
+    const targetDate = (date as string) || todayStr;
+
+    // 1. 날짜형식 엄격성 검증
+    if (!isValidDateString(targetDate)) {
+      console.error(`[api/kbo/today-games] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
+      return res.status(200).json({
+        success: false,
+        date: targetDate,
+        kboDate: targetDate.replaceAll('-', ''),
+        games: [],
+        emptyReason: 'FETCH_OR_PARSE_FAILED',
+        error: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+        source: 'NONE',
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const kboDateStr = toKboDate(targetDate);
+    const forceRefresh = refresh === 'true';
+
     // A. 실시간 순위 정보 획득 (예측 엔진에 주입)
     const standingsRes = await getStandingsData(false); // 순위는 굳이 매 일정 조회마다 강제 새로고침할 필요는 없음
     const standingsList = standingsRes.success ? standingsRes.standings : [];
@@ -124,13 +125,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (err: any) {
     console.error('[api/kbo/today-games] [CRITICAL] Unhandled Server Exception', err);
-    return res.status(500).json({
+    return res.status(200).json({
       success: false,
       error: 'SERVER_EXCEPTION',
       message: '일정표를 조회하는 과정에서 치명적인 서버 내부 예외가 발생했습니다.',
       details: err.message || String(err),
       source: 'NONE',
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      games: [],
+      emptyReason: 'FETCH_OR_PARSE_FAILED'
     });
   }
 }

@@ -12,43 +12,43 @@ let lastRefreshTime = 0;
 const REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5분
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { date } = req.query;
-  console.log(`[api/kbo/refresh] [CALL] handler - KBO Data Manual Refresh Triggered for date: "${date}"`);
-  
-  const now = Date.now();
-  const timeElapsed = now - lastRefreshTime;
-
-  // 1. Rate-Limit 검증 (동일 사용자/봇의 디도스 방어)
-  if (timeElapsed < REFRESH_COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((REFRESH_COOLDOWN_MS - timeElapsed) / 1000);
-    console.warn(`[api/kbo/refresh] Rate-Limit Blocked. ${remainingSeconds}s remaining.`);
-    return res.status(200).json({
-      success: false,
-      error: 'RATE_LIMIT_EXCEEDED',
-      message: '너무 빈번한 새로고침 요청입니다. 잠시 후 다시 시도해주세요.',
-      cooldownSeconds: remainingSeconds,
-      updatedAt: new Date().toISOString()
-    });
-  }
-
-  const todayStr = getKoreaTodayString();
-  const targetDate = (date as string) || todayStr;
-
-  // 2. 날짜 유효성 검사
-  if (!isValidDateString(targetDate)) {
-    console.error(`[api/kbo/refresh] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    return res.status(200).json({
-      success: false,
-      error: 'INVALID_DATE_FORMAT',
-      message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
-      source: 'NONE',
-      updatedAt: new Date().toISOString()
-    });
-  }
-
-  const startTime = Date.now();
-
   try {
+    const { date } = req.query;
+    console.log(`[api/kbo/refresh] [CALL] handler - KBO Data Manual Refresh Triggered for date: "${date}"`);
+    
+    const now = Date.now();
+    const timeElapsed = now - lastRefreshTime;
+
+    // 1. Rate-Limit 검증 (동일 사용자/봇의 디도스 방어)
+    if (timeElapsed < REFRESH_COOLDOWN_MS) {
+      const remainingSeconds = Math.ceil((REFRESH_COOLDOWN_MS - timeElapsed) / 1000);
+      console.warn(`[api/kbo/refresh] Rate-Limit Blocked. ${remainingSeconds}s remaining.`);
+      return res.status(200).json({
+        success: false,
+        error: 'RATE_LIMIT_EXCEEDED',
+        message: '너무 빈번한 새로고침 요청입니다. 잠시 후 다시 시도해주세요.',
+        cooldownSeconds: remainingSeconds,
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const todayStr = getKoreaTodayString();
+    const targetDate = (date as string) || todayStr;
+
+    // 2. 날짜 유효성 검사
+    if (!isValidDateString(targetDate)) {
+      console.error(`[api/kbo/refresh] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
+      return res.status(200).json({
+        success: false,
+        error: 'INVALID_DATE_FORMAT',
+        message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+        source: 'NONE',
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const startTime = Date.now();
+
     console.log(`[api/kbo/refresh] Invoking force refresh for standings and schedule for date: "${targetDate}"`);
     
     // 순위와 일정을 캐시 무효화 상태로 강제 다시 긁어옵니다.
