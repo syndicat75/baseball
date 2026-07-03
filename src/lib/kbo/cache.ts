@@ -32,6 +32,12 @@ export interface CacheAdapter {
   set(key: string, data: any): Promise<void>;
 
   /**
+   * Deletes a specific value from the cache.
+   * @param key Unique cache key identifier
+   */
+  delete(key: string): Promise<void>;
+
+  /**
    * Clears all stored cache items.
    */
   clear(): Promise<void>;
@@ -75,6 +81,15 @@ export class MemoryCacheAdapter implements CacheAdapter {
       timestamp: Date.now(),
     });
     console.log(`[MemoryCacheAdapter] Successfully saved data to in-memory cache for key: "${key}"`);
+  }
+
+  /**
+   * Deletes a specific value from the in-memory cache.
+   */
+  async delete(key: string): Promise<void> {
+    console.log(`[MemoryCacheAdapter] delete called for key: "${key}"`);
+    this.store.delete(key);
+    console.log(`[MemoryCacheAdapter] Deleted key: "${key}" from in-memory cache.`);
   }
 
   /**
@@ -163,6 +178,26 @@ export class FileSystemCacheAdapter implements CacheAdapter {
   }
 
   /**
+   * Deletes a specific key from the local file system.
+   */
+  async delete(key: string): Promise<void> {
+    console.log(`[FileSystemCacheAdapter] delete called for key: "${key}"`);
+    this.ensureCacheDirExists();
+    const safeKey = key.replace(/[^a-zA-Z0-9_\-]/g, '_') + '.json';
+    const filePath = path.join(CACHE_DIR, safeKey);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`[FileSystemCacheAdapter] Successfully deleted cache file: "${filePath}"`);
+      } else {
+        console.log(`[FileSystemCacheAdapter] Key "${key}" not found on disk. No action taken.`);
+      }
+    } catch (error) {
+      console.error(`[FileSystemCacheAdapter] Error deleting cache file for key "${key}":`, error);
+    }
+  }
+
+  /**
    * Deletes all cached files from the local file system.
    * Logs every call.
    */
@@ -213,6 +248,15 @@ export async function getCache<T>(key: string, ttlMs: number): Promise<T | null>
 export async function setCache(key: string, data: any): Promise<void> {
   console.log(`[cache] setCache public wrapper called. Key: "${key}"`);
   return activeCache.set(key, data);
+}
+
+/**
+ * Standard public wrapper for deleting specific item from the active cache adapter.
+ * @param key The unique cache key
+ */
+export async function deleteCache(key: string): Promise<void> {
+  console.log(`[cache] deleteCache public wrapper called. Key: "${key}"`);
+  return activeCache.delete(key);
 }
 
 /**

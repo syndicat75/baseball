@@ -1,32 +1,21 @@
 /**
  * @file simulate.ts
  * @description KBO 가을야구 진출 확률을 연산하는 몬테카를로 시뮬레이션 엔드포인트입니다.
- * 실시간 크롤링을 완전히 배제하고, 예약 수집된 정적 로컬 JSON 데이터 파일만 읽어 고속 연산을 처리합니다.
+ * 정적 JSON 파일뿐만 아니라, 실시간 API 수집 데이터를 활용하여 완벽한 실시간 가을야구 진출 확률을 연산합니다.
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as fs from 'fs';
-import * as path from 'path';
 import { simulateSeason } from '../src/lib/simulation/simulateSeason';
+import { getStandingsData, getTodayGamesData } from '../src/lib/kbo/kboDataService';
 import { ProbabilityModelType, KBOGame, KBOStandingsResult } from '../src/types';
+import { getKoreaTodayString } from '../src/lib/kbo/dateUtils';
 import { getEstimatedHeadToHead } from '../src/lib/kbo/sources/sourceManager';
-import { fallbackSource } from '../src/lib/kbo/sources/fallbackSource';
-
-/**
- * 한국 시간(KST) 기준 YYYY-MM-DD 날짜 반환
- */
-function getKstDateString(): string {
-  const d = new Date();
-  const kstOffset = 9 * 60 * 60 * 1000;
-  const kstDate = new Date(d.getTime() + kstOffset);
-  return kstDate.toISOString().split('T')[0];
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { date, iterations, model, seed } = req.query;
   console.log(`[api/simulate] [CALL] handler - date: "${date}", iterations: "${iterations}", model: "${model}", seed: "${seed}"`);
 
-  const todayStr = getKstDateString();
+  const todayStr = getKoreaTodayString();
   const targetDate = (date as string) || todayStr;
 
   let requestedIters = parseInt(iterations as string) || 10000;
@@ -43,128 +32,93 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const randSeed = seed ? parseInt(seed as string) : 42;
 
   try {
-    // 1. JSON 파일 경로 판별 (Vercel Serverless의 특수한 파일 적재 방식 완벽 대응)
-    let safeDirname = '';
-    try {
-      safeDirname = __dirname;
-    } catch {
-      safeDirname = process.cwd();
+    // 1. 실시간 최신 순위 정보 수집
+    const standingsRes = await getStandingsData(false);
+    if (!standingsRes.success || !standingsRes.standings || standingsRes.standings.length !== 10) {
+      throw new Error(`순위표 데이터를 확보할 수 없습니다 (이유: ${standingsRes.message || '데이터 규격 미달'}).`);
     }
 
-    /**
-     * Vercel Serverless 실행 환경 및 로컬 환경에서 지정된 JSON 데이터 파일의 물리적 경로를 탐색하여 반환합니다.
-     * @param fileName 탐색할 JSON 파일명 (예: kbo-latest.json)
-     * @returns 파일이 존재하는 경로 문자열 또는 null
-     */
-    const findDataPath = (fileName: string): string | null => {
-      const candidates = [
-        path.join(process.cwd(), 'public', 'data', fileName),
-        path.join(process.cwd(), 'data', fileName),
-        path.join(safeDirname, '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, '..', '..', '..', 'public', 'data', fileName),
-        path.join(safeDirname, 'public', 'data', fileName),
-        path.join(safeDirname, 'data', fileName),
-        path.join('/var/task', 'public', 'data', fileName),
-      ];
-      for (const p of candidates) {
-        if (fs.existsSync(p)) {
-          console.log(`[api/simulate] Found ${fileName} at: ${p}`);
-          return p;
-        }
-      }
-      return null;
-    };
-
-    let dataPath = findDataPath(`kbo-${targetDate}.json`);
-
-    if (!dataPath) {
-      console.log(`[api/simulate] 지정 날짜 데이터 "kbo-${targetDate}.json" 없음. kbo-latest.json 검색을 시도합니다.`);
-      dataPath = findDataPath('kbo-latest.json');
+    // 2. 실시간 최신 경기 일정 및 결과 수집
+    const gamesRes = await getTodayGamesData(targetDate, false);
+    if (!gamesRes.success) {
+      throw new Error(`경기 일정표를 불러오지 못했습니다 (이유: ${gamesRes.error || '일정 수집 차단'}).`);
     }
 
-    let kboData: any;
-
-    if (fs.existsSync(dataPath)) {
-      console.log(`[api/simulate] 정적 JSON 파일 로드 성공: ${dataPath}`);
-      const rawData = fs.readFileSync(dataPath, 'utf-8');
-      kboData = JSON.parse(rawData);
-    } else {
-      // 2. 만약 어떠한 JSON 캐시 파일도 존재하지 않을 경우를 대비해 긴급 로컬 fallback 생성
-      console.warn('[api/simulate] 어떠한 캐시 JSON 파일도 존재하지 않습니다! 긴급 로컬 Fallback을 가동합니다.');
-      const fallbackStandings = await fallbackSource.getStandings();
-      const fallbackSchedule = await fallbackSource.getSchedule();
-      kboData = {
-        asOfDate: todayStr,
-        fetchedAt: new Date().toISOString(),
-        primarySource: 'bundled-fallback',
-        sourceLabel: '번들 로컬 예비 데이터 (긴급 비상 조치)',
-        standings: fallbackStandings,
-        remainingGames: fallbackSchedule.remainingGames,
-        completedGames: fallbackSchedule.completedGames,
-        failedSources: [{ source: 'local-cache-missing', reason: 'public/data/ 폴더에 캐시 파일이 생성되어 있지 않습니다.' }],
-        warnings: ['시스템 초기 설치 상태이거나, 예약 수집 파일이 부재하여 시스템 임시 하드코딩 데이터를 탑재했습니다.'],
-      };
-    }
+    const allGames = gamesRes.games || [];
+    const unresolvedGames = allGames.filter((g: any) => g.status === '예정');
 
     // 3. 시뮬레이션용 데이터 구조 복원
-    const headToHead = getEstimatedHeadToHead(kboData.standings);
+    // standings 데이터를 KBOTeam standings 양식에 매치시킵니다.
+    const mappedTeams = standingsRes.standings.map((t: any) => ({
+      team: t.team,
+      nameKo: t.nameKo || t.team,
+      games: t.games,
+      wins: t.wins,
+      losses: t.losses,
+      draws: t.draws,
+      winRate: t.winningPct,
+      rank: t.rank,
+    }));
+
+    const headToHead = getEstimatedHeadToHead(standingsRes.standings as any);
+    
     const standingsResult: KBOStandingsResult = {
-      asOfDate: kboData.asOfDate,
-      source: 'static-json', // 프론트 요구사항 8번에 따른 소스명 통일
-      teams: kboData.standings.map((t: any) => ({
-        team: t.team,
-        nameKo: t.displayName || t.nameKo || t.team,
-        games: t.games,
-        wins: t.wins,
-        losses: t.losses,
-        draws: t.draws,
-        winRate: t.winRate,
-        rank: t.rank,
-      })),
+      asOfDate: targetDate,
+      source: standingsRes.source,
+      teams: mappedTeams,
       headToHead,
     };
 
-    const unresolvedGames = kboData.remainingGames.filter((g: KBOGame) => g.status === 'scheduled');
-    const allGames = [...kboData.completedGames, ...kboData.remainingGames];
-
     // 4. 시뮬레이션 수행
     console.log(`[api/simulate] 몬테카를로 시뮬레이션 연산 작동 (반복: ${iters}회, 모델: ${modelType})`);
-    const simResults = await simulateSeason(standingsResult, allGames, unresolvedGames, {
-      date: kboData.asOfDate,
-      iterations: iters,
-      model: modelType,
-      seed: randSeed,
-    });
+    
+    // KBOGame 포맷으로 복원
+    const kboGamesMapped: any[] = allGames.map((g: any) => ({
+      id: g.gameId,
+      date: g.date,
+      time: g.time,
+      away: g.awayTeam,
+      home: g.homeTeam,
+      awayScore: g.awayScore,
+      homeScore: g.homeScore,
+      status: g.status === '종료' ? 'completed' : g.status === '우천취소' ? 'postponed' : 'scheduled',
+      stadium: g.stadium
+    }));
 
-    const isFallback = kboData.primarySource === 'bundled-fallback';
-    const finalSource = isFallback ? 'bundled-fallback' : kboData.primarySource;
+    const simResults = await simulateSeason(
+      standingsResult,
+      kboGamesMapped as KBOGame[],
+      (kboGamesMapped as KBOGame[]).filter((g: any) => g.status === 'scheduled'),
+      {
+        date: targetDate,
+        iterations: iters,
+        model: modelType,
+        seed: randSeed,
+      }
+    );
 
     const responseBody = {
       ...simResults,
-      unresolvedGames,
+      unresolvedGames: kboGamesMapped.filter((g: any) => g.status === 'scheduled'),
       source: 'static-json',
-      sourceLabel: '예약 수집 JSON 데이터',
-      originalSource: finalSource,
-      originalSourceLabel: kboData.sourceLabel,
-      fetchedAt: kboData.fetchedAt,
-      errorType: isFallback ? '샘플 데이터 사용' : undefined,
-      errorMessage: isFallback ? '로컬 예비 데이터를 기준으로 연산 완료되었습니다.' : undefined,
-      warnings: [
-        ...warnings,
-        ...(kboData.warnings || [])
-      ],
-      failedSources: kboData.failedSources || []
+      sourceLabel: '실시간 분석 시뮬레이션 데이터',
+      originalSource: standingsRes.source,
+      originalSourceLabel: standingsRes.sourceLabel,
+      fetchedAt: standingsRes.updatedAt,
+      warnings,
     };
 
     console.log('[api/simulate] 시뮬레이션 완료. 응답을 정상 전달합니다.');
     return res.status(200).json(responseBody);
+
   } catch (error: any) {
     console.error('[api/simulate] 시뮬레이션 도중 치명적 에러 발생:', error);
-    return res.status(500).json({
-      error: 'Simulation critical failure',
-      details: error.message,
-      errorMessage: '시뮬레이션 가동 중 극심한 연산 장해가 감지되었습니다.',
+    return res.status(200).json({
+      success: false,
+      error: 'SIMULATION_FAILED',
+      message: '실시간 데이터를 바탕으로 몬테카를로 가을야구 시뮬레이션을 가동하는 과정에서 오류가 발생했습니다.',
+      details: error.message || String(error),
+      updatedAt: new Date().toISOString()
     });
   }
 }

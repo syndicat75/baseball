@@ -1,16 +1,11 @@
 /**
  * @file refresh.ts
  * @description KBO 리그 원격 크롤링 데이터 및 내부 캐시 수동 갱신을 수행하는 Vercel Serverless API 엔드포인트입니다.
- * 
- * 주요 특징:
- * 1. 5분 Rate-Limit 보호 기작 유지
- * 2. `getUnifiedKboData`에 `forceRefresh = true` 파라미터를 넘겨 캐시 강제 삭제 및 최신 크롤링 수집 기동
- * 3. 수집 과정에서 검증(games = wins + losses + draws 및 major team 과소 검사)과 동일 시즌 경기수 감소 비허용 규칙을 엄격히 적용
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
-import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
+import { getStandingsData, getTodayGamesData } from '../../src/lib/kbo/kboDataService';
+import { getKoreaTodayString, isValidDateString } from '../../src/lib/kbo/dateUtils';
 
 // 메모리 기반 전역 Rate-Limit 추적 객체 (컨테이너 라이프사이클 내에서 유지)
 let lastRefreshTime = 0;
@@ -27,12 +22,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (timeElapsed < REFRESH_COOLDOWN_MS) {
     const remainingSeconds = Math.ceil((REFRESH_COOLDOWN_MS - timeElapsed) / 1000);
     console.warn(`[api/kbo/refresh] Rate-Limit Blocked. ${remainingSeconds}s remaining.`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    return res.status(429).json({
+    return res.status(200).json({
       success: false,
-      error: 'Too Many Requests',
+      error: 'RATE_LIMIT_EXCEEDED',
       message: '너무 빈번한 새로고침 요청입니다. 잠시 후 다시 시도해주세요.',
       cooldownSeconds: remainingSeconds,
+      updatedAt: new Date().toISOString()
     });
   }
 
@@ -42,48 +37,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // 2. 날짜 유효성 검사
   if (!isValidDateString(targetDate)) {
     console.error(`[api/kbo/refresh] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    return res.status(400).json({
+    return res.status(200).json({
       success: false,
-      error: 'Bad Request',
+      error: 'INVALID_DATE_FORMAT',
       message: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+      source: 'NONE',
+      updatedAt: new Date().toISOString()
     });
   }
 
   const startTime = Date.now();
 
   try {
-    // 3. 통합 데이터 레이어를 forceRefresh = true 로 호출하여 전체 캐시 삭제 및 강제 재크롤링 기동
-    console.log(`[api/kbo/refresh] Invoking forceRefresh for date: "${targetDate}"`);
-    const kboData = await getUnifiedKboData(targetDate, true);
+    console.log(`[api/kbo/refresh] Invoking force refresh for standings and schedule for date: "${targetDate}"`);
+    
+    // 순위와 일정을 캐시 무효화 상태로 강제 다시 긁어옵니다.
+    const [standingsRes, gamesRes] = await Promise.all([
+      getStandingsData(true),
+      getTodayGamesData(targetDate, true)
+    ]);
 
-    // Rate Limit 시간 업데이트
-    lastRefreshTime = Date.now();
-    const durationMs = lastRefreshTime - startTime;
+    // 둘 다 수집 성공했거나, 최소한 순위표라도 가져왔으면 성공으로 인정
+    if (standingsRes.success || gamesRes.success) {
+      lastRefreshTime = Date.now();
+      const durationMs = lastRefreshTime - startTime;
 
-    console.log(`[api/kbo/refresh] [SUCCESS] Manual refresh finished successfully in ${durationMs}ms.`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      console.log(`[api/kbo/refresh] [SUCCESS] Manual refresh completed in ${durationMs}ms.`);
+      return res.status(200).json({
+        success: true,
+        message: `${targetDate} 기준 KBO 리그 데이터가 성공적으로 갱신되었습니다.`,
+        refreshedAt: new Date().toISOString(),
+        durationMs,
+        standingsSource: standingsRes.source,
+        scheduleSource: gamesRes.source,
+        standingsFallback: standingsRes.fallbackUsed,
+        scheduleFallback: gamesRes.fallbackUsed,
+        warnings: [...(standingsRes.warnings || []), ...(gamesRes.warnings || [])]
+      });
+    } else {
+      throw new Error(`순위 및 일정 수집 과정이 모두 에러를 반환했습니다. (순위오류: ${standingsRes.error}, 일정오류: ${gamesRes.error})`);
+    }
 
-    return res.status(200).json({
-      success: true,
-      message: `${targetDate} 기준 KBO 리그 데이터가 성공적으로 갱신되었습니다.`,
-      refreshedAt: kboData.updatedAt,
-      durationMs,
-      source: kboData.source,
-      sourceLabel: kboData.sourceLabel,
-      stale: kboData.stale,
-      fallbackUsed: kboData.fallbackUsed,
-      warnings: kboData.warnings,
-      lgGames: kboData.lgGames
-    });
   } catch (err: any) {
     console.error('[api/kbo/refresh] [ERROR] 수동 갱신 중 예외 발생:', err);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    return res.status(500).json({
+    return res.status(200).json({
       success: false,
-      error: 'Refresh process failed',
-      message: '최신 정보를 크롤링하여 수집하는 과정에서 에러가 발생했거나, 새로 수집한 데이터가 stale/invalid 상태여서 안전하게 수동 갱신을 차단했습니다.',
-      details: err.message,
+      error: 'REFRESH_FAILED',
+      message: '최신 정보를 크롤링하여 수집하는 과정에서 에러가 발생했거나, 새로 수집한 데이터 검증이 기각되었습니다.',
+      details: err.message || String(err),
+      source: 'NONE',
+      updatedAt: new Date().toISOString()
     });
   }
 }
+

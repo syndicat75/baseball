@@ -1,76 +1,137 @@
 /**
  * @file today-games.ts
  * @description KBO 리그 당일 경기 일정 및 선발 명단 정보를 제공하는 Vercel Serverless API 엔드포인트입니다.
- * 
- * 주요 수정 사항:
- * 1. 로컬 정적 JSON 대신 `getUnifiedKboData`를 호출하여 최신 실시간 순위와 일정에 입각해 경기 예측 모델 구축
- * 2. 캐싱 효율성 극대화 및 날짜 포맷 엄격 검증
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
-import { buildTodayGames } from '../../src/lib/kbo/buildTodayGames';
-import { getKoreaTodayString, toKboDate, isValidDateString } from '../../src/lib/kbo/dateUtils';
+import { getStandingsData, getTodayGamesData } from '../../src/lib/kbo/kboDataService';
+import { calculateGamePrediction } from '../../src/lib/kbo/predictionEngine';
+import { getKoreaTodayString, isValidDateString, toKboDate } from '../../src/lib/kbo/dateUtils';
+import { PitcherStats } from '../../src/types';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { date } = req.query;
-  console.log(`[api/kbo/today-games] [CALL] handler - date param: "${date}"`);
+  const { date, refresh } = req.query;
+  console.log(`[api/kbo/today-games] [CALL] handler - date param: "${date}", refresh: "${refresh}"`);
 
   const todayStr = getKoreaTodayString();
   const targetDate = (date as string) || todayStr;
   const kboDateStr = toKboDate(targetDate);
+  const forceRefresh = refresh === 'true';
 
   // 1. 날짜형식 엄격성 검증
   if (!isValidDateString(targetDate)) {
     console.error(`[api/kbo/today-games] [ERROR] 유효하지 않은 날짜 형식 요청: "${targetDate}"`);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    return res.status(400).json({
+    return res.status(200).json({
       success: false,
       date: targetDate,
       kboDate: kboDateStr,
       games: [],
       emptyReason: 'FETCH_OR_PARSE_FAILED',
       error: '유효하지 않은 날짜 형식입니다. YYYY-MM-DD 포맷을 입력해주세요.',
+      source: 'NONE',
+      updatedAt: new Date().toISOString()
     });
   }
 
   try {
-    // 통합 데이터 획득
-    const kboData = await getUnifiedKboData(targetDate, false);
+    // A. 실시간 순위 정보 획득 (예측 엔진에 주입)
+    const standingsRes = await getStandingsData(false); // 순위는 굳이 매 일정 조회마다 강제 새로고침할 필요는 없음
+    const standingsList = standingsRes.success ? standingsRes.standings : [];
 
-    // 당일 경기 매칭 및 선발 투수 정보, 예측 승률 분석 수치 가공
-    const todayGames = buildTodayGames(kboData, targetDate);
+    // B. 실시간 당일 일정 및 선발투수 획득
+    const gamesResult = await getTodayGamesData(targetDate, forceRefresh);
 
-    // 실시간 일정 갱신을 위해 10분 s-maxage 설정
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=300');
+    if (!gamesResult.success) {
+      console.warn(`[api/kbo/today-games] Schedule data collection returned success: false. Bypassing 500 error.`);
+      return res.status(200).json({
+        success: false,
+        error: gamesResult.error || 'SCHEDULE_COLLECTION_FAILED',
+        message: '경기 일정 정보를 조회하지 못했습니다.',
+        source: gamesResult.source || 'NONE',
+        updatedAt: gamesResult.updatedAt || new Date().toISOString(),
+        games: [],
+        emptyReason: 'FETCH_OR_PARSE_FAILED'
+      });
+    }
 
-    const hasGames = todayGames.length > 0;
-    const response = {
+    // C. 각 경기마다 예측 승률 정보 계산 및 주입
+    const finalGames = gamesResult.games.map((g) => {
+      let prediction = null;
+
+      if (standingsList.length === 10) {
+        // PitcherStats 형식 맵핑 헬퍼
+        const mapPitcher = (p: any, teamName: string): PitcherStats | undefined => {
+          if (!p || !p.name) return undefined;
+          const wins = p.wins || 0;
+          const losses = p.losses || 0;
+          const total = wins + losses;
+          return {
+            name: p.name,
+            team: teamName,
+            wins,
+            losses,
+            winningPct: total > 0 ? wins / total : 0.5,
+            era: p.era || 4.50,
+            innings: 50,
+            whip: 1.35,
+            strikeouts: 40,
+            recentEra: p.era || 4.50,
+            recentGames: 3
+          };
+        };
+
+        const awayStarterMapped = mapPitcher(g.awayStarter, g.awayTeam);
+        const homeStarterMapped = mapPitcher(g.homeStarter, g.homeTeam);
+
+        try {
+          prediction = calculateGamePrediction(
+            g.awayTeam,
+            g.homeTeam,
+            g.stadium || '구장',
+            standingsList as any,
+            [], // completedGames는 Elorating 계산 등의 부가적 요소로 생략 가능
+            awayStarterMapped,
+            homeStarterMapped
+          );
+        } catch (predErr) {
+          console.warn(`[api/kbo/today-games] Non-blocking warning: Failed to calculate prediction for game ${g.gameId}`, predErr);
+        }
+      }
+
+      return {
+        ...g,
+        prediction
+      };
+    });
+
+    // 성공 시 브라우저 및 CDN 캐시 헤더 부여 (종료된 경기 목록이 있으면 30분, 예정 경기가 섞여 있으면 5분)
+    const hasUnfinishedGames = finalGames.some(g => g.status === '예정' || g.status === '진행중');
+    const cacheTtlSeconds = hasUnfinishedGames ? 300 : 1800;
+    res.setHeader('Cache-Control', `s-maxage=${cacheTtlSeconds}, stale-while-revalidate=300`);
+
+    console.log(`[api/kbo/today-games] [SUCCESS] Responding with ${finalGames.length} games and computed predictions.`);
+    return res.status(200).json({
       success: true,
       date: targetDate,
       kboDate: kboDateStr,
-      updatedAt: kboData.updatedAt || new Date().toISOString(),
-      source: kboData.source,
-      sourceLabel: kboData.sourceLabel,
-      stale: kboData.stale,
-      fallbackUsed: kboData.fallbackUsed,
-      games: todayGames,
-      emptyReason: hasGames ? null : 'NO_SCHEDULED_GAMES',
-    };
+      source: gamesResult.source,
+      sourceLabel: gamesResult.sourceLabel,
+      fallbackUsed: gamesResult.fallbackUsed,
+      updatedAt: gamesResult.updatedAt,
+      games: finalGames,
+      emptyReason: gamesResult.emptyReason
+    });
 
-    console.log(`[api/kbo/today-games] [SUCCESS] Compiled ${todayGames.length} games for ${targetDate}`);
-    return res.status(200).json(response);
   } catch (err: any) {
-    console.error('[api/kbo/today-games] [ERROR] 당일 경기 목록 구축 실패:', err);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    console.error('[api/kbo/today-games] [CRITICAL] Unhandled Server Exception', err);
     return res.status(500).json({
       success: false,
-      date: targetDate,
-      kboDate: kboDateStr,
-      games: [],
-      emptyReason: 'FETCH_OR_PARSE_FAILED',
-      error: '경기 일정 데이터를 가공하거나 로드하는 데 실패했습니다.',
-      details: err.message,
+      error: 'SERVER_EXCEPTION',
+      message: '일정표를 조회하는 과정에서 치명적인 서버 내부 예외가 발생했습니다.',
+      details: err.message || String(err),
+      source: 'NONE',
+      updatedAt: new Date().toISOString()
     });
   }
 }
+

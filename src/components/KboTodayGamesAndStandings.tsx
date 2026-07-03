@@ -129,7 +129,23 @@ export function KboTodayGamesAndStandings() {
       }
 
       if (data && data.games) {
-        setGames(data.games);
+        // 클라이언트 사이드 중복 방지 및 자가 매치업 방지 디펜시브 코드 적용
+        const seenGameIds = new Set<string>();
+        const uniqueGames = (data.games as TodayGame[]).filter((g) => {
+          if (!g.gameId) return false;
+          if (g.awayTeam === g.homeTeam) {
+            console.warn(`[KboTodayGamesAndStandings] Filtered out invalid self-matchup game: ${g.gameId}`);
+            return false;
+          }
+          if (seenGameIds.has(g.gameId)) {
+            console.warn(`[KboTodayGamesAndStandings] Filtered out duplicate gameId: ${g.gameId}`);
+            return false;
+          }
+          seenGameIds.add(g.gameId);
+          return true;
+        });
+
+        setGames(uniqueGames);
         setGamesMeta({
           source: data.source || 'Unknown',
           sourceLabel: data.sourceLabel || '알 수 없는 출처',
@@ -137,11 +153,11 @@ export function KboTodayGamesAndStandings() {
           fallbackUsed: !!data.fallbackUsed,
           updatedAt: data.updatedAt || new Date().toISOString(),
         });
-        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${data.games.length} games.`);
+        console.log(`[KboTodayGamesAndStandings] [SUCCESS] fetchTodayGamesData - Mapped ${uniqueGames.length} unique games.`);
         
         // 새로 불러왔을 때 모든 경기는 기본적으로 닫아두되 첫 경기만 열어둠
         const initialExpanded: Record<string, boolean> = {};
-        data.games.forEach((g: TodayGame, index: number) => {
+        uniqueGames.forEach((g: TodayGame, index: number) => {
           initialExpanded[g.gameId] = index === 0;
         });
         setExpandedGames(initialExpanded);

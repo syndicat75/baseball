@@ -1,58 +1,73 @@
 /**
  * @file schedule.ts
  * @description KBO 리그 전체 일정(완료 경기, 잔여 경기 등)을 분석·반환하는 Vercel Serverless API 엔드포인트입니다.
- * 
- * 주요 수정 사항:
- * 1. 정적 JSON 직접 읽기 대신 `getUnifiedKboData` 공용 서비스 연동 적용
- * 2. 한국 표준시(KST) 및 날짜별 온전한 데이터 수집 보장
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getUnifiedKboData } from '../../src/lib/kbo/kboDataService';
-import { getKoreaTodayString, toKboDate } from '../../src/lib/kbo/dateUtils';
+import { getTodayGamesData } from '../../src/lib/kbo/kboDataService';
+import { getKoreaTodayString } from '../../src/lib/kbo/dateUtils';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { from } = req.query;
-  console.log(`[api/kbo/schedule] [CALL] handler - from param: "${from}"`);
+  const { from, refresh } = req.query;
+  console.log(`[api/kbo/schedule] [CALL] handler - from param: "${from}", refresh: "${refresh}"`);
 
   const todayStr = getKoreaTodayString();
   const targetDate = (from as string) || todayStr;
+  const forceRefresh = refresh === 'true';
 
   try {
-    // 통합 데이터 획득
-    const kboData = await getUnifiedKboData(targetDate, false);
+    const gamesResult = await getTodayGamesData(targetDate, forceRefresh);
 
-    const completedGames = kboData.completedGames || [];
-    const remainingGames = kboData.remainingGames || [];
-    const unresolvedGames = remainingGames.filter((g: any) => g.status === 'scheduled');
-    const allGames = [...completedGames, ...remainingGames];
+    if (!gamesResult.success) {
+      console.warn(`[api/kbo/schedule] Schedule data collection returned success: false. Bypassing 500 error.`);
+      return res.status(200).json({
+        success: false,
+        error: gamesResult.error || 'SCHEDULE_COLLECTION_FAILED',
+        message: '경기 일정 정보를 조회하지 못했습니다.',
+        source: gamesResult.source || 'NONE',
+        updatedAt: gamesResult.updatedAt || new Date().toISOString(),
+        completedGames: [],
+        remainingGames: [],
+        unresolvedGames: [],
+        games: []
+      });
+    }
+
+    const allGames = gamesResult.games || [];
+    const completedGames = allGames.filter((g: any) => g.status === '종료');
+    const remainingGames = allGames.filter((g: any) => g.status !== '종료');
+    const unresolvedGames = allGames.filter((g: any) => g.status === '예정');
 
     // 10분 s-maxage 설정
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=300');
 
     const response = {
-      source: kboData.source,
-      sourceLabel: kboData.sourceLabel,
-      originalSource: kboData.source,
-      originalSourceLabel: kboData.sourceLabel,
-      stale: kboData.stale,
-      fallbackUsed: kboData.fallbackUsed,
+      success: true,
+      source: gamesResult.source,
+      sourceLabel: gamesResult.sourceLabel,
+      originalSource: gamesResult.source,
+      originalSourceLabel: gamesResult.sourceLabel,
+      stale: false,
+      fallbackUsed: gamesResult.fallbackUsed,
       completedGames,
       remainingGames,
       unresolvedGames,
       games: allGames,
-      asOfDate: kboData.asOfDate,
-      fetchedAt: kboData.updatedAt,
+      asOfDate: targetDate,
+      fetchedAt: gamesResult.updatedAt,
     };
 
     console.log(`[api/kbo/schedule] [SUCCESS] Returned ${allGames.length} total games for ${targetDate}`);
     return res.status(200).json(response);
   } catch (err: any) {
-    console.error('[api/kbo/schedule] 일정 반환 실패:', err);
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    console.error('[api/kbo/schedule] [CRITICAL] Unhandled Server Exception', err);
     return res.status(500).json({
-      error: 'Schedule load failure',
-      details: err.message,
+      success: false,
+      error: 'SERVER_EXCEPTION',
+      message: '일정을 조회하는 과정에서 치명적인 서버 내부 예외가 발생했습니다.',
+      details: err.message || String(err),
+      source: 'NONE',
+      updatedAt: new Date().toISOString()
     });
   }
 }

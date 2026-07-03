@@ -1,102 +1,117 @@
-# KBO 실시간 순위 및 경기 분석 예측 시스템 설계서 (Design.md)
+# KBO 데이터 분석 및 가을야구 시뮬레이션 시스템 설계서 (Design.md)
 
-본 문서는 KBO 실시간 순위 분석 및 경기 승률 예측 웹 애플리케이션의 아키텍처와 주요 파일 구조, 정합성 검증 규칙, 데이터 캐싱 및 예외 처리 정책을 상세히 설명합니다.
+이 문서는 KBO 실시간 팀 순위표, 당일 경기 일정, 선발 투수 분석 및 몬테카를로 가을야구 진출 확률 시뮬레이터 백엔드와 프론트엔드 아키텍처를 상세히 기술합니다.
 
 ---
 
-## 1. 전체 아키텍처 개요
+## 1. 아키텍처 개요 (Architecture Overview)
 
-본 웹앱은 **Full-Stack (Vite + React + Express)** 아키텍처를 따르며, 사용자 브라우저에서의 데이터 노출과 크롤링 수집 서버의 역할을 유기적으로 분리하여 설계되었습니다.
+전체 시스템은 다음과 같은 정교한 계층 구조(Layered Architecture)를 기반으로 하여 견고하고 확장성 높게 구성되어 있습니다.
 
 ```
-┌────────────────────────────────────────────────────────┐
-│                      Client Layer                      │
-│   - React 18 / Tailwind CSS / Lucide React             │
-│   - KboTodayGamesAndStandings.tsx (메인 대시보드 컴포넌트)│
-│   - 실시간 정합성 검증 디버그 패널 (Integrity Check UI)  │
-└───────────────────────────┬────────────────────────────┘
-                            │ API Request (JSON)
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                       API Layer                        │
-│   - Express API Routes (/api/kbo/*)                    │
-│   - standings.ts, today-games.ts, refresh.ts, etc      │
-└───────────────────────────┬────────────────────────────┘
-                            │ Service Invocation
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                     Service Layer                      │
-│   - kboDataService.ts (데이터 통합 오케스트레이터)        │
-│   - 수집원 우선순위 관리, 전수 검증, 캐싱 생명주기 제어  │
-└───────────────────────────┬────────────────────────────┘
-                            │ Data Retrieval
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│                   Data Source Layer                    │
-│   - officialKboKoreanSource (KBO 공식 국문 페이지 크롤러) │
-│   - officialKboEnglishSource (KBO 영문 페이지 크롤러)     │
-│   - myKboStatsSource & aiScoreSource (보조 데이터 소스)   │
-│   - fallbackSource (로컬 예비 데이터)                  │
-└────────────────────────────────────────────────────────┘
++--------------------------------------------------------+
+|                      Client UI                         |
+|   - Real-time Leaderboard                              |
+|   - Today's Games (Pitcher Profile & Predictions)      |
+|   - Monte-Carlo Playoff Probability Simulator          |
++--------------------------------------------------------+
+                           |
+                           v [Fetch / API call]
++--------------------------------------------------------+
+|                     API Layer                          |
+|   - /api/kbo/standings (팀 순위 데이터)                |
+|   - /api/kbo/today-games (일정 및 선발 투수 분석)      |
+|   - /api/kbo/refresh (수동 크롤링 캐시 퍼지 및 재수집)   |
+|   - /api/kbo/predictions (경기별 승률 예측 및 세부 지표)|
+|   - /api/kbo/schedule (KBO 경기 일정 이력 분석)        |
+|   - /api/simulate (가을야구 시뮬레이션 연산)             |
++--------------------------------------------------------+
+                           |
+                           v [API Execution]
++--------------------------------------------------------+
+|                 KBO Core Service Layer                 |
+|   - kboDataService.ts                                  |
+|     (수집 오케스트레이터, 캐싱 스토어 연동, 장애 복구) |
++--------------------------------------------------------+
+       |                           |
+       v [Caching & Store]         v [Real-time Scraping]
++-------------------------+     +---------------------------------------------------+
+|     Caching Layer       |     |               Scraping Engine Layer               |
+|  - cache.ts             |     |  - parseOfficialStandings.ts                      |
+|    (Memory & FS cache)  |     |    (1순위: KBO 공식 영문 사이트 파싱)             |
+|                         |     |  - parseOfficialScoreboard.ts                     |
+|                         |     |    (1순위: KBO 공식 국문 Scoreboard 실시간 파싱)  |
+|                         |     |  - parseMyKboSchedule.ts                          |
+|                         |     |    (2순위 Fallback: MyKBOStats 주간 일정 파싱)    |
+|                         |     |  - parseMyKboGameDetail.ts                        |
+|                         |     |    (선발투수 시즌 누적 지표 수집 및 정합 가공)    |
++-------------------------+     +---------------------------------------------------+
+                                                           |
+                                                           v [HTML Fetching / Validation]
+                                +---------------------------------------------------+
+                                |            Core Scraping Helpers & Rules          |
+                                |  - fetchHtml.ts (User-Agent 순환 및 재시도)       |
+                                |  - validateKboData.ts (데이터 수학적 검증 수행)   |
+                                |  - dateUtils.ts (KST 기준 날짜 데이터 가상 보장)  |
+                                +---------------------------------------------------+
 ```
 
 ---
 
-## 2. 파일 디렉터리 및 모듈 구조
+## 2. 데이터 흐름 및 폴백(Fallback) 기작
 
-설계 원칙에 따라 하나의 파일에 로직이 집중되는 것을 방지하고, 기능별로 고도로 모듈화하여 구성했습니다.
+### A. KBO 팀 순위표 (Standings) 수집 흐름
+1. **1순위 소스 (`parseOfficialStandings`)**: `https://eng.kbo.com/Standings/TeamStandings.aspx` (KBO 공식 영문 순위 페이지)를 긁어옵니다.
+2. **검증 및 정합성 체크 (`validateKboData`)**:
+   - 총 10개 구단이 온전히 존재하는가?
+   - LG 트윈스가 반드시 포함되어 있는가?
+   - 경기수(Games) = 승(Wins) + 패(Losses) + 무(Draws) 공식이 수학적으로 만족하는가?
+3. **정합성 탈락 또는 수집 장애 시**:
+   - 로컬 파일 시스템 또는 메모리 캐시에 이미 저장되어 있던 `latest_good_v2` (안정성이 검증된 마지막 최신 정상 순위표)를 강제로 반환하여 화면 붕괴를 예방합니다.
+   - 데이터 노후화 경고(`stale: true`) 및 경고 리스트(`warnings`)를 응답 헤더와 JSON 바디에 동시 탑재합니다.
 
-*   `src/config.ts`: 모든 환경 변수, 모델명, KBO 공식 URL, 10개 구단 메타데이터(색상, 국문명, 로고 글자 등)를 한곳에 모아 집중 관리하는 설정 파일입니다.
-*   `src/components/KboTodayGamesAndStandings.tsx`: 실시간 팀 순위와 일일 경기 승률 예측 데이터를 탭으로 제공하는 반응형 UI 컴포넌트입니다. 수집 출처 표기, 기준 일자 노출, 수동 동기화 쿨다운 제어, 무결성 디버그 패널을 탑재하고 있습니다.
-*   `src/lib/kbo/kboDataService.ts`: 비즈니스 로직과 캐시 정책을 집약한 싱글턴 서비스 레이어입니다.
-*   `src/lib/kbo/sources/`: KBO 수집원 크롤러 어댑터가 위치한 디렉터리입니다.
-    *   `officialKboKoreanSource.ts`: KBO 공식 홈페이지 국문 순위표를 cheerio 기반으로 크롤링하여 정수형으로 정확하게 추출합니다. (가장 높은 우선순위)
-    *   `officialKboEnglishSource.ts`: KBO 공식 영문 페이지 파서입니다.
-    *   `myKboStatsSource.ts` / `aiScoreSource.ts`: 공식 사이트 점검이나 우천 취소 등으로 인한 일시적 장애 대응용 보조 파서입니다.
-    *   `fallbackSource.ts`: 최악의 네트워크 단절 상황에서 조립해 주는 로컬 번들 백업 데이터셋입니다.
-    *   `sourceManager.ts`: 수집 일정 통합 관리 모듈입니다.
-*   `src/lib/kbo/cache.ts`: 파일시스템(개발 환경) 및 메모리(Vercel 서버리스 등 프로덕션 환경) 캐시를 투명하게 지원하는 어댑터 모듈입니다.
-*   `src/lib/kbo/dateUtils.ts`: 서버/클라이언트가 언제나 `Asia/Seoul` (한국 표준시, KST) 시간대를 일관되게 적용하여 하루 경계의 불일치를 차단하는 시간 유틸리티입니다.
-
----
-
-## 3. 핵심 아키텍처 메커니즘 및 정합성 검증
-
-### A. 데이터 소스 획득 우선순위 (Prioritization)
-데이터 유실이나 오래된 예비 데이터의 오사용을 철저히 차단하기 위해 순위표 획득 단계에서 엄격한 우선순위를 따릅니다:
-1.  **KBO 국문 공식 데이터 (`KBO_OFFICIAL_KR`)**: 가장 최신이고 권위 있는 출처.
-2.  **KBO 영문 공식 데이터 (`KBO_OFFICIAL_EN`)**
-3.  **보조 수집원 (`FALLBACK_SOURCE`)** (MyKBO, AiScore 등)
-4.  **마지막 성공 캐시 (`LAST_SUCCESS_CACHE`)** (서버 무중단 및 임시 오류 보존용)
-5.  **로컬 번들 에셋 (`BUNDLED_FALLBACK`)**
-
-### B. 캐싱 정책 & 실시간 크롤링 연계
-*   팀 순위표는 기본 TTL **10분**으로 캐싱되며, 이 기간 내에는 백엔드 리소스를 낭비하지 않고 빠르게 응답합니다.
-*   `최신 정보 크롤링 수집` 버튼을 눌러 격발하는 `/api/kbo/refresh` 요청 시, 메모리 및 파일 캐시가 완전히 퍼지(Purge)되고 데이터 소스를 실시간 강제 크롤링하여 갱신합니다.
-*   어뷰징 차단을 위해 수동 새로고침 요청은 IP/세션별로 **60초 동안의 재요청 제한(Rate Limit Cooldown)** 장치가 활성화됩니다.
-
-### C. 데이터 무결성 전수 검증 공식 (Integrity Formula)
-수집된 데이터가 오염되었거나 오래되어 경기 수가 오히려 줄어드는 버그를 사전에 탐지하기 위해, `kboDataService`와 프론트엔드 검증 패널은 다음 세 가지 전수 합치 테스트를 자동 실행합니다:
-1.  **공식 일치 검사 (`games = wins + losses + draws`)**: 10개 구단 전체에 대해 경기수가 승, 패, 무승부의 총합과 완벽히 일치하는지 전수 대조합니다. 하나라도 일치하지 않으면 해당 데이터 소스는 수집 실패 처리(Invalidate)됩니다.
-2.  **주요 구단 비정상 경기수 검사**: 리그 중반(예: 7~8월)임에도 LG, KIA, 삼성, 두산 등의 경기수가 터무니없이 적게 조회(예: 70게임 미만 등)되는 경우, 비시즌 리셋 기간이 아닌 한 오래된 Stale 데이터로 조기 판정하여 캐시 오버라이트를 철저히 격리 차단합니다.
-3.  **최신 데이터 우선 원칙 (Anti-Degradation)**: 새로 가져온 standings의 구단별 총 경기수 합산이 이미 캐시에 보관 중인 경기수 합산보다 작으면, 데이터가 퇴화한 것으로 보고 최신 캐시 데이터를 그대로 보존하며 `stale=true` 플래그와 `STALE_STANDINGS_SOURCE` 경고를 달아 반환합니다.
+### B. 경기 일정 및 선발투수 (Schedule & Pitchers) 수집 흐름
+1. **1순위 일정 소스 (`parseOfficialScoreboard`)**: KBO 공식 국문 Scoreboard(`https://www.kbo.com/schedule/scoreboard.aspx?date=YYYYMMDD`)를 우선 긁어옵니다.
+2. **2순위 일정 Fallback (`parseMyKboSchedule`)**: 국문 Scoreboard 수집 실패 시, 안정적인 주간 일정을 제공하는 MyKBOStats 주간 페이지(`https://mykbostats.com/schedule/week_of/YYYY-MM-DD`)를 긁어와 당일 경기를 추출합니다.
+3. **선발투수 상세 지표 수집 (`parseMyKboGameDetail`)**:
+   - 일정에서 추출된 경기별 고유 분석 링크를 통해 투수 세부 페이지에 진입합니다.
+   - 원정/홈 선발 투수명, 시즌 승-패, 시즌 평균자책점(ERA) 등을 정밀 추출합니다.
+   - 만약 특정 경기의 투수 데이터 파싱에 실패하더라도, 전체 당일 경기 일정이 마비되지 않도록 예외 처리를 국소화하여 안정성을 확보했습니다.
 
 ---
 
-## 4. 프론트엔드 실시간 무결성 검증 디버그 패널
+## 3. 핵심 규칙 및 제약 사항 준수
 
-구동 중인 웹 화면의 `실시간 현재 팀 순위표` 탭 하단에 **[실시간 데이터 검증]** 대시보드를 추가 탑재했습니다.
-
-*   **LG 트윈스 소화 경기수 실시간 추적**: 어제 일자 기준의 누적 경기 소화량(예: 80경기)을 직관적으로 확인하여 데이터 오차가 발생하지 않는지 투명하게 검증합니다.
-*   **전체 10개 구단 총 경기수 모니터링**: 리그 전체 구단이 소화한 총 누적 경기수를 합산하여, 비정상적인 데이터 퇴화가 발생하는지 실시간 감지합니다.
-*   **정합성 공식 검증 여부 실시간 전수 판정**: `games = wins + losses + draws` 가 정확히 만족하는지 `🟢 검증 합격` 또는 `🔴 검증 불합격`으로 상태를 일목요연하게 표시합니다.
-*   **구단별 경기수 정합성 상세 분석**: 10개 구단 각각의 수집 경기수가 합격선(OK) 내에 안착했는지 개별 그리드 뱃지를 통해 한눈에 디버깅할 수 있습니다.
+1. **JSON 표준 안전 응답**:
+   - 어떠한 크롤링/파싱 실패 상황에서도 HTTP 500 에러 혹은 브라우저 크래시를 유발하는 Non-JSON 문자열을 내뱉지 않으며, 반드시 `{ success: false, error: '...', message: '...' }` 형태의 규격화된 JSON과 HTTP 200 상태 코드를 반환합니다.
+2. **KST 표준시 고정**:
+   - UTC 시차로 인한 날짜 밀림 현상을 방지하기 위해 모든 시간 연산은 한국 표준시(KST, UTC+9) 기하 구조를 강제 보장하며, `new Date("YYYY-MM-DD")` 같은 내장 함수 오작동을 차단하는 전용 문자열 처리 도구(`dateUtils.ts`)를 사용합니다.
+3. **오염 및 인위적 조작 차단**:
+   - LG 경기수 하드코딩 등 일체의 인위적 우회 코드를 제거하여, 스크래핑된 실제 공식 데이터만 신뢰성 있게 서비스합니다.
 
 ---
 
-## 5. 로그 기록 정책 (Logging Policy)
+## 4. 디렉토리 및 파일 상세 설계
 
-안정적인 유지 보수와 문제 해결을 위해 시스템 내의 모든 핵심 이벤트와 함수 호출은 **의미 있는 상세 콘솔 로그**를 상세하게 생성합니다:
-*   `[KboTodayGamesAndStandings] [CALL] fetchStandingsData`: API 호출 시작 및 응답 수집 시점 기록
-*   `[kboDataService] Cache check...` / `[kboDataService] Successfully wrote JSON backup...` 등 서버측 캐시 흐름 제어 기록
-*   `[KBO_STANDINGS_DEBUG]`: 호출 일자, 한국시간 기준 오늘 날짜, 최종 선택된 수집 출처 명칭, 실제 활용된 데이터 세부 현황 등을 주기적으로 출력하여 장애 복구를 가속화합니다.
+### A. Core Library (`src/lib/kbo/`)
+- `cache.ts`: 메모리 및 파일시스템 2중 캐시 어댑터
+- `dateUtils.ts`: KST 전용 날짜 포맷 변환 및 정합성 검사
+- `kboDataService.ts`: 순위표 및 일정 수집 및 Fallback 오케스트레이터
+- `statsCalculator.ts`: 득실점차, 최근 10경기, 승률 등 세부 지표 계산 엔진
+- `predictionEngine.ts`: 선발 투수, 최근 기세, 불펜 전력 가중치 기반 승률 예측 알고리즘
+
+### B. Real-time Scraping Engine (`src/lib/kbo/sources/`)
+- `fetchHtml.ts`: 유동적인 User-Agent 생성 및 HTML 안전 조회
+- `parseOfficialStandings.ts`: KBO 공식 영문 사이트 파싱 및 구단명 정규화
+- `parseOfficialScoreboard.ts`: KBO 공식 국문 스코어보드 실시간 중계 파싱
+- `parseMyKboSchedule.ts`: MyKBOStats 일정표 파싱 (백업 소스)
+- `parseMyKboGameDetail.ts`: 선발 투수 통계 정보 정밀 파싱
+- `validateKboData.ts`: 데이터 유효성 정합성 수리 연산 검사
+
+### C. Serverless API Router (`api/`)
+- `/api/kbo/standings.ts`: 최신 순위표 정보 API
+- `/api/kbo/today-games.ts`: 당일 경기 일정 및 선발투수 정보 API
+- `/api/kbo/predictions.ts`: 경기별 상세 예측 수치 API
+- `/api/kbo/schedule.ts`: 경기 역사 및 완료 데이터 이력 API
+- `/api/kbo/refresh.ts`: 캐시 강제 무효화 및 크롤러 즉시 작동 API
+- `/api/simulate.ts`: 실시간 수집 데이터를 주입받는 몬테카를로 플레이오프 시뮬레이터 API
