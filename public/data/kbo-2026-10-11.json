@@ -1,6 +1,6 @@
 {
   "asOfDate": "2026-10-11",
-  "fetchedAt": "2026-10-11T12:43:40.385Z",
+  "fetchedAt": "2026-10-11T22:44:23.333Z",
   "standingsSource": "official-kbo-en",
   "standingsSourceLabel": "KBO 공식 영문 데이터",
   "scheduleSource": "generated-from-standings",
@@ -11,31 +11,31 @@
     {
       "team": "KT",
       "displayName": "KT",
-      "games": 142,
-      "wins": 88,
+      "games": 143,
+      "wins": 89,
       "losses": 49,
       "draws": 5,
-      "winRate": 0.642,
+      "winRate": 0.645,
       "rank": 1
     },
     {
       "team": "SAMSUNG",
       "displayName": "삼성",
-      "games": 142,
+      "games": 143,
       "wins": 83,
-      "losses": 56,
+      "losses": 57,
       "draws": 3,
-      "winRate": 0.597,
+      "winRate": 0.593,
       "rank": 2
     },
     {
       "team": "KIA",
       "displayName": "KIA",
-      "games": 142,
+      "games": 143,
       "wins": 78,
-      "losses": 62,
+      "losses": 63,
       "draws": 2,
-      "winRate": 0.557,
+      "winRate": 0.553,
       "rank": 3
     },
     {
@@ -81,11 +81,11 @@
     {
       "team": "LOTTE",
       "displayName": "롯데",
-      "games": 142,
-      "wins": 62,
+      "games": 143,
+      "wins": 63,
       "losses": 77,
       "draws": 3,
-      "winRate": 0.446,
+      "winRate": 0.45,
       "rank": 8
     },
     {
@@ -127,32 +127,6 @@
       "date": "2026-10-11",
       "time": "18:30",
       "away": "KIA",
-      "home": "LOTTE",
-      "awayScore": null,
-      "homeScore": null,
-      "stadium": "NEUTRAL",
-      "status": "scheduled",
-      "synthetic": true,
-      "clearly_synthetic": true,
-      "reason": "Generated from Standings to ensure 144 games"
-    },
-    {
-      "date": "2026-10-11",
-      "time": "18:30",
-      "away": "KT",
-      "home": "KIA",
-      "awayScore": null,
-      "homeScore": null,
-      "stadium": "NEUTRAL",
-      "status": "scheduled",
-      "synthetic": true,
-      "clearly_synthetic": true,
-      "reason": "Generated from Standings to ensure 144 games"
-    },
-    {
-      "date": "2026-10-11",
-      "time": "18:30",
-      "away": "SAMSUNG",
       "home": "LG",
       "awayScore": null,
       "homeScore": null,
@@ -7397,11 +7371,11 @@
     "일정 데이터 정합성 불일치로 인해 순위표 기준 144경기 자동 보정 일정을 생성하여 적용했습니다."
   ],
   "dataQuality": {
-    "standingsCompletedGames": 715,
+    "standingsCompletedGames": 717,
     "scheduleCompletedGames": 720,
-    "scheduleRemainingGames": 5,
-    "expectedRemainingGamesByStandings": 5,
-    "syntheticGameCount": 5,
+    "scheduleRemainingGames": 3,
+    "expectedRemainingGamesByStandings": 3,
+    "syntheticGameCount": 3,
     "isScheduleConsistentWithStandings": false
   }
 }
