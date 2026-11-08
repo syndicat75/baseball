@@ -1,6 +1,6 @@
 {
   "asOfDate": "2026-11-08",
-  "fetchedAt": "2026-11-08T13:10:22.794Z",
+  "fetchedAt": "2026-11-08T23:01:46.440Z",
   "standingsSource": "official-kbo-en",
   "standingsSourceLabel": "KBO 공식 영문 데이터",
   "scheduleSource": "bundled-fallback",
@@ -9,16 +9,6 @@
   "sourceLabel": "예약 수집 JSON 데이터",
   "standings": [
     {
-      "team": "KT",
-      "displayName": "KT",
-      "games": 144,
-      "wins": 90,
-      "losses": 49,
-      "draws": 5,
-      "winRate": 0.647,
-      "rank": 1
-    },
-    {
       "team": "SAMSUNG",
       "displayName": "삼성",
       "games": 144,
@@ -26,6 +16,16 @@
       "losses": 58,
       "draws": 3,
       "winRate": 0.589,
+      "rank": 1
+    },
+    {
+      "team": "KT",
+      "displayName": "KT",
+      "games": 144,
+      "wins": 90,
+      "losses": 49,
+      "draws": 5,
+      "winRate": 0.647,
       "rank": 2
     },
     {
